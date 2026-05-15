@@ -1,109 +1,236 @@
-import React, { useContext, useState } from 'react';
-import { View, Text, TouchableOpacity, FlatList, StyleSheet, Alert, Modal, TextInput } from 'react-native';
+import React, { useState, useContext, useMemo } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'react-native';
 import { AppContext } from '../context/AppContext';
+import { Ionicons } from '@expo/vector-icons';
+import FormularioProducto from '../components/FormularioProducto';
+import RegistroEmpleado from '../components/RegistroEmpleado';
+import { db } from '../firebaseConfig';
+import { doc, deleteDoc } from 'firebase/firestore';
 
-export default function AdminScreen({ navigation }) {
-  const { productos, setProductos, usuarios, ordenes } = useContext(AppContext);
-  const [tab, setTab] = useState('Productos');
-  const [modalVisible, setModalVisible] = useState(false);
+export default function AdminScreen() {
+  const { setUsuario, productos, usuariosGlobales, ordenes } = useContext(AppContext); 
+  const [seccion, setSeccion] = useState('menu');
+  const [modalProducto, setModalProducto] = useState(false);
+  const [verRegistroUser, setVerRegistroUser] = useState(false);
+  const [itemParaEditar, setItemParaEditar] = useState(null);
+  const [usuarioParaEditar, setUsuarioParaEditar] = useState(null);
 
-  // Estados para el formulario de nuevo producto
-  const [nombreP, setNombreP] = useState('');
-  const [precioP, setPrecioP] = useState('');
+  // --- LÓGICA DE CLASIFICACIÓN ---
+  const categorias = ["entradas", "plato fuerte", "bebidas", "postres"];
 
-  // OPERACIÓN CRUD: Crear producto
-  const handleGuardar = () => {
-    if (!nombreP || !precioP) return Alert.alert("Error", "Campos incompletos");
-    const nuevo = { id: Date.now(), nombre: nombreP, precio: parseFloat(precioP), stock: 0 };
-    setProductos([...productos, nuevo]);
-    setModalVisible(false);
-    setNombreP(''); setPrecioP('');
+  const stats = useMemo(() => {
+    const pagadas = ordenes.filter(o => o.estado === 'Pagada');
+    const totalDinero = pagadas.reduce((acc, o) => acc + parseFloat(o.total || 0), 0);
+    return {
+      monto: totalDinero.toFixed(2),
+      cantidad: pagadas.length,
+    };
+  }, [ordenes]);
+
+  const handleLogout = () => {
+    Alert.alert("Cerrar Sesión", "¿Estás seguro de salir?", [
+      { text: "No" },
+      { text: "Sí", onPress: () => setUsuario(null) }
+    ]);
   };
 
-  // OPERACIÓN CRUD: Actualizar (Aumentar stock)
-  const sumarStock = (id) => {
-    setProductos(productos.map(p => p.id === id ? { ...p, stock: p.stock + 10 } : p));
-  };
-
-  // OPERACIÓN CRUD: Eliminar
-  const eliminar = (id) => {
-    Alert.alert("Confirmar", "¿Eliminar este producto?", [
-      { text: "Cancelar" },
-      { text: "Eliminar", onPress: () => setProductos(productos.filter(p => p.id !== id)) }
+  const eliminarItem = (id, coleccion) => {
+    Alert.alert("Confirmar eliminación", "Esta acción no se puede deshacer.", [
+      { text: "Cancelar", style: "cancel" },
+      { text: "Eliminar", style: 'destructive', onPress: async () => {
+          await deleteDoc(doc(db, coleccion, id));
+          Alert.alert("Éxito", "Eliminado correctamente");
+      }}
     ]);
   };
 
   return (
     <View style={styles.container}>
-      {/* Modal para CRUD funcional */}
-      <Modal visible={modalVisible} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Nuevo Producto</Text>
-            <TextInput placeholder="Nombre" style={styles.input} value={nombreP} onChangeText={setNombreP} />
-            <TextInput placeholder="Precio" style={styles.input} value={precioP} onChangeText={setPrecioP} keyboardType="numeric" />
-            <TouchableOpacity onPress={handleGuardar} style={styles.btnGuardar}><Text style={styles.btnText}>Guardar</Text></TouchableOpacity>
-            <TouchableOpacity onPress={() => setModalVisible(false)}><Text style={styles.btnCancelar}>Cancelar</Text></TouchableOpacity>
-          </View>
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.headerSubtitle}>Bienvenido,</Text>
+          <Text style={styles.headerTitle}>Administrador</Text>
         </View>
-      </Modal>
-
-      <Text style={styles.header}>Gestión de {tab}</Text>
-      
-      {/* Tabs de navegación */}
-      <View style={styles.tabContainer}>
-        {['Productos', 'Inventario', 'Usuarios'].map(t => (
-          <TouchableOpacity key={t} onPress={() => setTab(t)} style={[styles.tab, tab === t && styles.tabActive]}>
-            <Text style={tab === t ? styles.tabTextActive : styles.tabText}>{t}</Text>
-          </TouchableOpacity>
-        ))}
+        <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}>
+          <Ionicons name="log-out-outline" size={24} color="#FF3B30" />
+        </TouchableOpacity>
       </View>
 
-      {/* Lista dinámica */}
-      <FlatList
-        data={tab === 'Usuarios' ? usuarios : productos}
-        keyExtractor={item => item.id.toString()}
-        renderItem={({ item }) => (
-          <View style={styles.card}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.itemTitle}>{item.nombre}</Text>
-              <Text>{tab === 'Usuarios' ? `Rol: ${item.rol}` : `$${item.precio} | Stock: ${item.stock}`}</Text>
-            </View>
-            <View style={styles.actions}>
-              {tab === 'Inventario' && (
-                <TouchableOpacity onPress={() => sumarStock(item.id)} style={styles.btnAccion}><Text>➕</Text></TouchableOpacity>
-              )}
-              {tab === 'Productos' && (
-                <TouchableOpacity onPress={() => eliminar(item.id)} style={styles.btnAccion}><Text>🗑️</Text></TouchableOpacity>
-              )}
+      <View style={styles.tabBar}>
+        <TouchableOpacity 
+          style={[styles.tab, seccion === 'menu' && styles.tabActive]} 
+          onPress={() => { setSeccion('menu'); setVerRegistroUser(false); }}
+        >
+          <Ionicons name={seccion === 'menu' ? "fast-food" : "fast-food-outline"} size={22} color={seccion === 'menu' ? '#FF6F00' : '#8E8E93'} />
+          <Text style={[styles.tabText, seccion === 'menu' && styles.tabTextActive]}>Menú</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity 
+          style={[styles.tab, seccion === 'usuarios' && styles.tabActive]} 
+          onPress={() => setSeccion('usuarios')}
+        >
+          <Ionicons name={seccion === 'usuarios' ? "people" : "people-outline"} size={22} color={seccion === 'usuarios' ? '#FF6F00' : '#8E8E93'} />
+          <Text style={[styles.tabText, seccion === 'usuarios' && styles.tabTextActive]}>Personal</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity 
+          style={[styles.tab, seccion === 'reportes' && styles.tabActive]} 
+          onPress={() => { setSeccion('reportes'); setVerRegistroUser(false); }}
+        >
+          <Ionicons name={seccion === 'reportes' ? "stats-chart" : "stats-chart-outline"} size={22} color={seccion === 'reportes' ? '#FF6F00' : '#8E8E93'} />
+          <Text style={[styles.tabText, seccion === 'reportes' && styles.tabTextActive]}>Reportes</Text>
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+        
+        {seccion === 'menu' && (
+          <View style={styles.seccionContainer}>
+            <TouchableOpacity style={styles.btnAdd} onPress={() => { setItemParaEditar(null); setModalProducto(true); }}>
+              <Ionicons name="add-circle" size={22} color="white" />
+              <Text style={styles.btnAddText}> Añadir Nuevo Producto</Text>
+            </TouchableOpacity>
+
+            {/* PRODUCTOS CLASIFICADOS POR CATEGORÍA */}
+            {categorias.map((cat) => {
+              const productosFiltrados = productos.filter(p => p.categoria.toLowerCase() === cat);
+              if (productosFiltrados.length === 0) return null;
+
+              return (
+                <View key={cat} style={{marginBottom: 20}}>
+                  <Text style={[styles.sectionTitle, {color: '#FF6F00'}]}>{cat.toUpperCase()}</Text>
+                  {productosFiltrados.map((prod) => (
+                    <View key={prod.id} style={styles.cardItem}>
+                      <View style={styles.cardLeft}>
+                        <Text style={styles.itemName}>{prod.nombre}</Text>
+                        <Text style={styles.itemPrice}>${parseFloat(prod.precio).toFixed(2)}</Text>
+                      </View>
+                      <View style={styles.itemActions}>
+                        <TouchableOpacity onPress={() => { setItemParaEditar(prod); setModalProducto(true); }} style={styles.actionBtn}>
+                          <Ionicons name="pencil" size={20} color="#007AFF" />
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => eliminarItem(prod.id, 'productos')} style={[styles.actionBtn, {backgroundColor: '#FFF1F0'}]}>
+                          <Ionicons name="trash" size={20} color="#FF3B30" />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              );
+            })}
+          </View>
+        )}
+
+        {/* ... (Secciones de Usuarios y Reportes se mantienen igual que en tu código) */}
+        {seccion === 'usuarios' && (
+          <View style={styles.seccionContainer}>
+            {!verRegistroUser ? (
+              <>
+                <TouchableOpacity style={[styles.btnAdd, {backgroundColor: '#007AFF'}]} onPress={() => { setUsuarioParaEditar(null); setVerRegistroUser(true); }}>
+                  <Ionicons name="person-add" size={22} color="white" />
+                  <Text style={styles.btnAddText}> Registrar Nuevo Empleado</Text>
+                </TouchableOpacity>
+                
+                <Text style={styles.sectionTitle}>Equipo Registrado</Text>
+                {usuariosGlobales?.map((user) => (
+                  <View key={user.id} style={styles.cardItem}>
+                    <View style={styles.cardLeft}>
+                      <Text style={styles.itemName}>{user.nombre}</Text>
+                      <View style={[styles.roleBadge, {backgroundColor: user.rol.toLowerCase().includes('admin') ? '#E8F5E9' : '#FFF3E0'}]}>
+                         <Text style={[styles.roleText, {color: user.rol.toLowerCase().includes('admin') ? '#2E7D32' : '#E65100'}]}>
+                            {user.rol.toUpperCase()}
+                         </Text>
+                      </View>
+                    </View>
+                    <View style={styles.itemActions}>
+                        <TouchableOpacity onPress={() => { setUsuarioParaEditar(user); setVerRegistroUser(true); }} style={styles.actionBtn}>
+                            <Ionicons name="create-outline" size={22} color="#007AFF" />
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => eliminarItem(user.id, 'usuarios')} style={[styles.actionBtn, {backgroundColor: '#FFF1F0', marginLeft: 10}]}>
+                            <Ionicons name="trash-outline" size={22} color="#FF3B30" />
+                        </TouchableOpacity>
+                    </View>
+                  </View>
+                ))}
+              </>
+            ) : (
+              <RegistroEmpleado 
+                itemParaEditar={usuarioParaEditar} 
+                onFinalizar={() => { setVerRegistroUser(false); setUsuarioParaEditar(null); }} 
+              />
+            )}
+          </View>
+        )}
+
+        {seccion === 'reportes' && (
+          <View style={styles.seccionContainer}>
+            <Text style={styles.sectionTitle}>Balance General</Text>
+            <View style={styles.cardReporte}>
+              <View style={styles.reportRow}>
+                <View style={styles.reportCircle}>
+                  <Ionicons name="wallet" size={30} color="#4CAF50" />
+                </View>
+                <View>
+                  <Text style={styles.reportLabel}>Ventas Totales</Text>
+                  <Text style={styles.reportValue}>${stats.monto}</Text>
+                </View>
+              </View>
+              <View style={styles.divider} />
+              <Text style={styles.reporteSub}>
+                <Ionicons name="checkmark-circle" size={14} color="#4CAF50" /> {stats.cantidad} Órdenes procesadas hoy
+              </Text>
             </View>
           </View>
         )}
-      />
+        <View style={{height: 40}} />
+      </ScrollView>
 
-      {tab === 'Productos' && (
-        <TouchableOpacity style={styles.fab} onPress={() => setModalVisible(true)}><Text style={styles.fabText}>+</Text></TouchableOpacity>
-      )}
+      <FormularioProducto 
+        visible={modalProducto} 
+        itemEditando={itemParaEditar} 
+        onClose={() => { setModalProducto(false); setItemParaEditar(null); }} 
+      />
     </View>
   );
 }
 
+// ... Los estilos se mantienen exactamente igual a tu código original
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f8f9fa', padding: 15 },
-  header: { fontSize: 22, fontWeight: 'bold', marginBottom: 15, color: '#333' },
-  tabContainer: { flexDirection: 'row', marginBottom: 20, backgroundColor: '#EEE', borderRadius: 10, padding: 5 },
-  tab: { flex: 1, padding: 10, alignItems: 'center', borderRadius: 8 },
-  tabActive: { backgroundColor: 'white', elevation: 2 },
-  tabTextActive: { color: '#FF6F00', fontWeight: 'bold' },
-  card: { flexDirection: 'row', backgroundColor: 'white', padding: 15, borderRadius: 12, marginBottom: 10, elevation: 2, alignItems: 'center' },
-  itemTitle: { fontSize: 16, fontWeight: 'bold' },
-  actions: { flexDirection: 'row' },
-  btnAccion: { padding: 10, backgroundColor: '#F0F0F0', borderRadius: 8, marginLeft: 10 },
-  fab: { position: 'absolute', bottom: 30, right: 30, backgroundColor: '#FF6F00', width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', elevation: 5 },
-  fabText: { color: 'white', fontSize: 30 },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
-  modalContent: { backgroundColor: 'white', padding: 25, borderRadius: 20, width: '85%' },
-  input: { borderBottomWidth: 1, borderColor: '#DDD', marginBottom: 20, padding: 10 },
-  btnGuardar: { backgroundColor: '#FF6F00', padding: 15, borderRadius: 10, alignItems: 'center' },
-  btnCancelar: { textAlign: 'center', marginTop: 15, color: '#666' }
-});
+    container: { flex: 1, backgroundColor: '#F2F2F7' },
+    header: { paddingTop: 60, paddingBottom: 20, paddingHorizontal: 25, backgroundColor: 'white', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderBottomLeftRadius: 20, borderBottomRightRadius: 20, elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 },
+    headerTitle: { fontSize: 24, fontWeight: 'bold', color: '#1C1C1E' },
+    headerSubtitle: { fontSize: 14, color: '#8E8E93' },
+    logoutBtn: { padding: 10, backgroundColor: '#FFF1F0', borderRadius: 12 },
+    tabBar: { flexDirection: 'row', backgroundColor: 'white', marginTop: 15, marginHorizontal: 20, borderRadius: 15, padding: 5, elevation: 2 },
+    tab: { flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: 12 },
+    tabActive: { backgroundColor: '#FFF5EE' },
+    tabText: { fontSize: 11, color: '#8E8E93', marginTop: 4, fontWeight: '500' },
+    tabTextActive: { color: '#FF6F00', fontWeight: 'bold' },
+    content: { flex: 1, padding: 20 },
+    seccionContainer: { marginBottom: 20 },
+    sectionTitle: { fontSize: 17, fontWeight: '700', marginBottom: 15, color: '#3A3A3C', paddingLeft: 5 },
+    btnAdd: { backgroundColor: '#FF6F00', padding: 16, borderRadius: 15, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginBottom: 25, elevation: 3 },
+    btnAddText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
+    cardItem: { backgroundColor: 'white', padding: 18, borderRadius: 18, marginBottom: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', elevation: 2 },
+    cardLeft: { flex: 1 },
+    categoryBadge: { backgroundColor: '#F2F2F7', alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, marginBottom: 5 },
+    categoryText: { fontSize: 10, color: '#8E8E93', fontWeight: 'bold', textTransform: 'uppercase' },
+    itemName: { fontSize: 17, fontWeight: '600', color: '#1C1C1E' },
+    itemPrice: { fontSize: 15, color: '#FF6F00', fontWeight: 'bold', marginTop: 2 },
+    roleBadge: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, marginTop: 6 },
+    roleText: { fontSize: 11, fontWeight: 'bold' },
+    itemActions: { flexDirection: 'row', alignItems: 'center' },
+    actionBtn: { padding: 10, backgroundColor: '#F2F2F7', borderRadius: 12, marginLeft: 8 },
+    cardReporte: { backgroundColor: 'white', padding: 25, borderRadius: 22, elevation: 4, borderLeftWidth: 6, borderLeftColor: '#4CAF50' },
+    reportRow: { flexDirection: 'row', alignItems: 'center' },
+    reportCircle: { width: 55, height: 55, borderRadius: 28, backgroundColor: '#E8F5E9', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
+    reportLabel: { fontSize: 14, color: '#8E8E93', fontWeight: '500' },
+    reportValue: { fontSize: 28, fontWeight: 'bold', color: '#1C1C1E' },
+    divider: { height: 1, backgroundColor: '#F2F2F7', marginVertical: 15 },
+    reporteTexto: { fontSize: 18, color: '#1C1C1E' },
+    reporteSub: { fontSize: 13, color: '#666', fontWeight: '500' },
+    historyItem: { backgroundColor: 'white', padding: 15, borderRadius: 12, marginBottom: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    historyLeft: { flexDirection: 'row', alignItems: 'center' },
+    historyName: { fontSize: 15, color: '#3A3A3C', marginLeft: 10, fontWeight: '500' },
+    historyAmount: { fontSize: 15, fontWeight: 'bold', color: '#4CAF50' }
+  });

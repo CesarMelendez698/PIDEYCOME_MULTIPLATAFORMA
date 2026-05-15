@@ -1,79 +1,99 @@
-import React, { useContext } from 'react';
-import { View, Text, TouchableOpacity, FlatList, StyleSheet, Alert } from 'react-native';
+import React, { useContext, useMemo } from 'react';
+import { 
+  View, 
+  Text, 
+  TouchableOpacity, 
+  FlatList, 
+  StyleSheet, 
+  Alert,
+  SafeAreaView,
+  Platform
+} from 'react-native';
 import { AppContext } from '../context/AppContext';
 import { Ionicons } from '@expo/vector-icons';
+import { db } from '../firebaseConfig';
+import { doc, updateDoc } from 'firebase/firestore';
 
 export default function CocinaScreen() {
-  const { ordenes, setOrdenes, usuario, setUsuario } = useContext(AppContext);
+  const { ordenes, usuario, setUsuario } = useContext(AppContext);
 
-  // Filtrar para no mostrar las órdenes que ya fueron despachadas (opcional)
-  const ordenesActivas = ordenes.filter(o => o.estado !== 'Despachada');
+  // --- FILTRADO: Solo órdenes que no han sido despachadas/pagadas ---
+  const ordenesActivas = useMemo(() => {
+    return ordenes.filter(o => ['Ordenada', 'Recibida', 'Preparando'].includes(o.estado));
+  }, [ordenes]);
 
-  const cambiarEstado = (id) => {
-    const nuevas = ordenes.map(o => {
-      if (o.id === id) {
-        if (o.estado === 'Ordenada') return { ...o, estado: 'Recibida' };
-        if (o.estado === 'Recibida') return { ...o, estado: 'Preparando' };
-        if (o.estado === 'Preparando') return { ...o, estado: 'Despachada' };
+  const cambiarEstado = async (id, estadoActual) => {
+    let proximoEstado = '';
+    if (estadoActual === 'Ordenada') proximoEstado = 'Recibida';
+    else if (estadoActual === 'Recibida') proximoEstado = 'Preparando';
+    else if (estadoActual === 'Preparando') proximoEstado = 'Despachada';
+
+    if (proximoEstado) {
+      try {
+        const ordenRef = doc(db, "ordenes", id);
+        await updateDoc(ordenRef, { estado: proximoEstado });
+      } catch (error) {
+        Alert.alert("Error", "No se pudo actualizar el estado.");
       }
-      return o;
-    });
-    setOrdenes(nuevas);
+    }
   };
 
   const handleLogout = () => {
-    Alert.alert("Cerrar Sesión", "¿Deseas salir del sistema de cocina?", [
-      { text: "Cancelar", style: "cancel" },
-      { text: "Salir", onPress: () => setUsuario(null) }
+    Alert.alert("Cerrar Sesión", "¿Estás seguro de salir de cocina?", [
+      { text: "No" },
+      { text: "Sí", onPress: () => setUsuario(null) }
     ]);
   };
 
   const renderOrden = ({ item }) => {
-    // Configuración dinámica según el estado de la imagen
+    // Configuración visual por colores y botones según el estado
     let config = { 
-      label: 'Ordenada', 
-      btnText: 'Recibir Orden', 
+      label: 'NUEVA', 
       color: '#FFB300', 
-      btnColor: '#2196F3', 
-      icon: 'notifications-outline' 
+      btnText: 'RECIBIR PEDIDO', 
+      icon: 'hand-left-outline' 
     };
 
     if (item.estado === 'Recibida') {
-      config = { label: 'Recibida por Cocina', btnText: 'Iniciar Preparación', color: '#2196F3', btnColor: '#FF6F00', icon: 'restaurant-outline' };
+      config = { label: 'EN COLA', color: '#2196F3', btnText: 'EMPEZAR COCINA', icon: 'flame-outline' };
     } else if (item.estado === 'Preparando') {
-      config = { label: 'Preparando', btnText: 'Despachar Orden', color: '#FF6F00', btnColor: '#4CAF50', icon: 'checkmark-circle-outline' };
+      config = { label: 'EN COCCIÓN', color: '#FF6F00', btnText: 'MARCAR LISTO', icon: 'checkmark-done-outline' };
     }
 
     return (
-      <View style={styles.card}>
+      <View style={[styles.card, { borderLeftColor: config.color }]}>
         <View style={styles.cardHeader}>
-          <View style={[styles.statusBadge, { backgroundColor: config.color + '20' }]}>
-            <Text style={[styles.statusText, { color: config.color }]}>{config.label}</Text>
+          <View>
+            <Text style={styles.mesaText}>{item.mesa || "LLEVAR"}</Text>
+            <Text style={styles.meseroText}>Atiende: {item.nombreMesero || 'General'}</Text>
           </View>
-          <Text style={styles.orderNumber}>Orden #{item.id.toString().slice(-3)}</Text>
-          <Text style={styles.timeText}><Ionicons name="time-outline" size={12} /> Ahora</Text>
+          <View style={[styles.statusBadge, { backgroundColor: config.color }]}>
+            <Text style={styles.statusBadgeText}>{config.label}</Text>
+          </View>
         </View>
 
-        <Text style={styles.mesaTitle}>{item.mesa || 'MESA 1'}</Text>
-        <Text style={styles.clienteText}>Cliente: <Text style={{ color: '#FF6F00' }}>{item.cliente}</Text></Text>
+        <View style={styles.clienteRow}>
+          <Ionicons name="person-outline" size={16} color="#8E8E93" />
+          <Text style={styles.clienteText}> Cliente: <Text style={{fontWeight: 'bold', color: '#1C1C1E'}}>{item.cliente}</Text></Text>
+        </View>
 
-        <View style={styles.itemsContainer}>
-          {item.productos.map((prod, index) => (
-            <View key={index} style={styles.itemRow}>
-              <Text style={styles.itemQty}>{prod.cantidad}x</Text>
-              <Text style={styles.itemName}>{prod.nombre}</Text>
+        <View style={styles.divider} />
+
+        {item.productos.map((prod, index) => (
+          <View key={index} style={styles.productRow}>
+            <View style={styles.qtyBadge}>
+              <Text style={styles.qtyText}>{prod.cantidad}</Text>
             </View>
-          ))}
-        </View>
+            <Text style={styles.productName}>{prod.nombre}</Text>
+          </View>
+        ))}
 
-        <Text style={styles.meseroInfo}>Mesero: Juan Pérez</Text>
-
-        <TouchableOpacity
-          onPress={() => cambiarEstado(item.id)}
-          style={[styles.actionButton, { backgroundColor: config.btnColor }]}
+        <TouchableOpacity 
+          style={[styles.btnAccion, { backgroundColor: config.color }]}
+          onPress={() => cambiarEstado(item.id, item.estado)}
         >
-          <Ionicons name={config.icon} size={18} color="white" />
-          <Text style={styles.actionButtonText}> {config.btnText}</Text>
+          <Ionicons name={config.icon} size={20} color="white" />
+          <Text style={styles.btnAccionText}>{config.btnText}</Text>
         </TouchableOpacity>
       </View>
     );
@@ -81,70 +101,118 @@ export default function CocinaScreen() {
 
   return (
     <View style={styles.container}>
-      {/* HEADER COCINA */}
+      {/* HEADER ESTILO ADMIN */}
       <View style={styles.header}>
-        <View style={styles.headerInfo}>
-          <View style={styles.iconCircle}>
-            <Ionicons name="restaurant" size={24} color="white" />
-          </View>
-          <View style={{ marginLeft: 12 }}>
-            <Text style={styles.headerTitle}>Cocina</Text>
-            <Text style={styles.headerSubtitle}>{ordenesActivas.length} órdenes activas</Text>
-          </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.headerSubtitle}>Panel de Control</Text>
+          <Text style={styles.headerTitle}>Monitor de Cocina</Text>
         </View>
         <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}>
-          <Text style={styles.logoutText}>Cerrar Sesión</Text>
+          <Ionicons name="log-out-outline" size={24} color="#FF3B30" />
         </TouchableOpacity>
+      </View>
+
+      <View style={styles.infoBar}>
+        <Ionicons name="flash" size={14} color="#FF6F00" />
+        <Text style={styles.infoBarText}> {ordenesActivas.length} PEDIDOS EN CURSO</Text>
       </View>
 
       <FlatList
         data={ordenesActivas}
-        keyExtractor={(item) => item.id.toString()}
+        keyExtractor={(item) => item.id}
         renderItem={renderOrden}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
+        ListEmptyComponent={
+          <View style={styles.emptyContainer}>
+            <Ionicons name="restaurant-outline" size={80} color="#CCC" />
+            <Text style={styles.emptyText}>No hay pedidos pendientes</Text>
+          </View>
+        }
       />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8FAFC' },
+  container: { flex: 1, backgroundColor: '#F2F2F7' },
   header: { 
-    paddingTop: 50, paddingHorizontal: 20, paddingBottom: 20, 
-    backgroundColor: 'white', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    borderBottomWidth: 1, borderBottomColor: '#EEE'
+    paddingTop: Platform.OS === 'ios' ? 60 : 50, 
+    paddingBottom: 25, 
+    paddingHorizontal: 25, 
+    backgroundColor: 'white', 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    borderBottomLeftRadius: 30, 
+    borderBottomRightRadius: 30, 
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 10
   },
-  headerInfo: { flexDirection: 'row', alignItems: 'center' },
-  iconCircle: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#FF6F00', justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 22, fontWeight: 'bold', color: '#333' },
-  headerSubtitle: { fontSize: 13, color: '#888' },
-  logoutBtn: { padding: 8, borderRadius: 8, borderWidth: 1, borderColor: '#DDD' },
-  logoutText: { fontSize: 12, color: '#666' },
+  headerTitle: { fontSize: 24, fontWeight: 'bold', color: '#1C1C1E' },
+  headerSubtitle: { fontSize: 12, color: '#8E8E93', textTransform: 'uppercase', letterSpacing: 1 },
+  logoutBtn: { padding: 10, backgroundColor: '#FFF1F0', borderRadius: 12 },
 
-  listContent: { padding: 15 },
+  infoBar: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'center', 
+    marginTop: 15, 
+    marginBottom: 5 
+  },
+  infoBarText: { fontSize: 11, fontWeight: 'bold', color: '#8E8E93', letterSpacing: 1 },
+
+  listContent: { padding: 20, paddingBottom: 40 },
   card: { 
-    backgroundColor: 'white', borderRadius: 15, padding: 20, marginBottom: 20,
-    elevation: 4, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10
+    backgroundColor: 'white', 
+    borderRadius: 20, 
+    padding: 20, 
+    marginBottom: 20, 
+    elevation: 4, 
+    borderLeftWidth: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 5
   },
-  cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
-  statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, marginRight: 10 },
-  statusText: { fontSize: 11, fontWeight: 'bold' },
-  orderNumber: { fontSize: 12, color: '#888', flex: 1 },
-  timeText: { fontSize: 12, color: '#888' },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 },
+  mesaText: { fontSize: 20, fontWeight: 'bold', color: '#1C1C1E' },
+  meseroText: { fontSize: 12, color: '#8E8E93', fontStyle: 'italic', marginTop: 2 },
   
-  mesaTitle: { fontSize: 24, fontWeight: 'bold', color: '#1A1A1A', marginBottom: 4 },
-  clienteText: { fontSize: 14, fontWeight: '600', color: '#666', marginBottom: 15 },
+  statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
+  statusBadgeText: { color: 'white', fontSize: 10, fontWeight: 'bold' },
+
+  clienteRow: { flexDirection: 'row', alignItems: 'center', marginTop: 5 },
+  clienteText: { fontSize: 14, color: '#3A3A3C' },
   
-  itemsContainer: { backgroundColor: '#F9FAFB', borderRadius: 10, padding: 12, marginBottom: 15 },
-  itemRow: { flexDirection: 'row', marginBottom: 6 },
-  itemQty: { fontWeight: 'bold', color: '#333', marginRight: 10 },
-  itemName: { color: '#555' },
+  divider: { height: 1, backgroundColor: '#F2F2F7', marginVertical: 15 },
   
-  meseroInfo: { fontSize: 12, color: '#AAA', marginBottom: 15 },
-  actionButton: { 
-    flexDirection: 'row', padding: 14, borderRadius: 10, 
-    justifyContent: 'center', alignItems: 'center' 
+  productRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  qtyBadge: { 
+    backgroundColor: '#F2F2F7', 
+    width: 28, 
+    height: 28, 
+    borderRadius: 8, 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    marginRight: 12 
   },
-  actionButtonText: { color: 'white', fontWeight: 'bold', fontSize: 14 }
+  qtyText: { fontWeight: 'bold', fontSize: 13, color: '#1C1C1E' },
+  productName: { fontSize: 16, color: '#3A3A3C', fontWeight: '500' },
+
+  btnAccion: { 
+    flexDirection: 'row', 
+    marginTop: 10, 
+    padding: 16, 
+    borderRadius: 15, 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    elevation: 2 
+  },
+  btnAccionText: { color: 'white', fontWeight: 'bold', marginLeft: 8, fontSize: 14, letterSpacing: 0.5 },
+
+  emptyContainer: { alignItems: 'center', marginTop: 100 },
+  emptyText: { color: '#8E8E93', marginTop: 15, fontSize: 16, fontWeight: '500' }
 });

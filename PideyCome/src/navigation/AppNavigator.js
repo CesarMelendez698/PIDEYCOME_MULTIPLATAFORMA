@@ -1,8 +1,9 @@
 import React, { useContext } from 'react';
 import { createStackNavigator } from '@react-navigation/stack';
 import { AppContext } from '../context/AppContext';
+import { View, ActivityIndicator } from 'react-native'; // Para el estado de carga
 
-// Importación de pantallas
+// Pantallas
 import LoginScreen from '../screens/LoginScreen';
 import MeseroScreen from '../screens/MeseroScreen';
 import CocinaScreen from '../screens/CocinaScreen';
@@ -12,7 +13,16 @@ import AdminScreen from '../screens/AdminScreen';
 const Stack = createStackNavigator();
 
 export default function AppNavigator() {
-  const { usuario } = useContext(AppContext);
+  const { usuario, cargando } = useContext(AppContext); // Asumiendo que añades 'cargando' al contexto
+
+  // Si aún estamos validando la sesión con Firebase
+  if (cargando) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#FF6F00" />
+      </View>
+    );
+  }
 
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -20,18 +30,21 @@ export default function AppNavigator() {
         <Stack.Screen name="Login" component={LoginScreen} />
       ) : (
         <>
-          {/* Navegación Condicional por Roles */}
-          {usuario.rol === 'mesero' && (
-            <Stack.Screen name="Mesero" component={MeseroScreen} />
+          {/* Usamos .trim() por si hay espacios accidentales en el string del rol */}
+          {usuario.rol?.toLowerCase().trim() === 'mesero' && (
+            <Stack.Screen name="MeseroHome" component={MeseroScreen} />
           )}
-          {usuario.rol === 'cocina' && (
-            <Stack.Screen name="Cocina" component={CocinaScreen} />
+          
+          {usuario.rol?.toLowerCase().trim() === 'cocina' && (
+            <Stack.Screen name="CocinaHome" component={CocinaScreen} />
           )}
-          {usuario.rol === 'caja' && (
-            <Stack.Screen name="Caja" component={CajaScreen} />
+          
+          {usuario.rol?.toLowerCase().trim() === 'caja' && (
+            <Stack.Screen name="CajaHome" component={CajaScreen} />
           )}
-          {usuario.rol === 'admin' && (
-            <Stack.Screen name="Admin" component={AdminScreen} />
+          
+          {usuario.rol?.toLowerCase().trim() === 'admin' && (
+            <Stack.Screen name="AdminHome" component={AdminScreen} />
           )}
         </>
       )}

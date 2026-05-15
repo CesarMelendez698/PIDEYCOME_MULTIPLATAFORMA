@@ -1,39 +1,90 @@
-import React, { createContext, useState } from 'react';
+import React, { createContext, useState, useEffect } from 'react';
+import { db } from '../firebaseConfig'; 
+import { 
+  collection, 
+  addDoc, 
+  onSnapshot, 
+  query, 
+  orderBy 
+} from 'firebase/firestore';
 
 export const AppContext = createContext();
 
 export const AppProvider = ({ children }) => {
-  const [usuario, setUsuario] = useState(null);
+  const [usuario, setUsuario] = useState(null); // Usuario logueado
+  const [productos, setProductos] = useState([]); // Lista de platillos/bebidas
+  const [ordenes, setOrdenes] = useState([]); // Comandas para cocina/mesero/caja
+  const [usuariosGlobales, setUsuariosGlobales] = useState([]); // Lista de empleados (para el Admin)
+  const [cargando, setCargando] = useState(true);
 
-  // Usuarios configurados según la imagen de prueba
-  const [usuarios] = useState([
-    { id: 1, nombre: 'Admin Central', username: 'admin', password: 'admin', rol: 'admin' },
-    { id: 2, nombre: 'Juan Pérez', username: 'mesero1', password: '1234', rol: 'mesero' },
-    { id: 3, nombre: 'Maria Garcia', username: 'cocina1', password: '1234', rol: 'cocina' },
-    { id: 4, nombre: 'Cajera 1', username: 'cajera1', password: '1234', rol: 'caja' },
-  ]);
+  // 1. ESCUCHAR PRODUCTOS EN TIEMPO REAL
+  // Usamos onSnapshot para que cualquier cambio (Edición/Eliminación) se vea al instante
+  useEffect(() => {
+    const q = query(collection(db, "productos"), orderBy("nombre", "asc"));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const lista = snapshot.docs.map(doc => ({ 
+        id: doc.id, 
+        ...doc.data() 
+      }));
+      setProductos(lista);
+    });
+    return () => unsubscribe();
+  }, []);
 
-  const [productos] = useState([
-    { id: 1, nombre: 'Hamburguesa Clásica', precio: 8.50, categoria: 'Comida' },
-    { id: 2, nombre: 'Pizza Margarita', precio: 12.00, categoria: 'Comida' },
-    { id: 3, nombre: 'Ensalada César', precio: 7.00, categoria: 'Comida' },
-    { id: 4, nombre: 'Coca Cola', precio: 2.50, categoria: 'Bebidas' },
-  ]);
+  // 2. ESCUCHAR USUARIOS (PERSONAL) EN TIEMPO REAL
+  // Esto permite al Admin ver y gestionar a Edwin, Cesar y otros empleados
+  useEffect(() => {
+    const q = query(collection(db, "usuarios"), orderBy("nombre", "asc"));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const lista = snapshot.docs.map(doc => ({ 
+        id: doc.id, 
+        ...doc.data() 
+      }));
+      setUsuariosGlobales(lista);
+    });
+    return () => unsubscribe();
+  }, []);
 
-  const [ordenes, setOrdenes] = useState([]);
+  // 3. ESCUCHAR ÓRDENES EN TIEMPO REAL
+  useEffect(() => {
+    const q = query(collection(db, "ordenes"), orderBy("fechaCreacion", "desc"));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const lista = snapshot.docs.map(doc => ({ 
+        id: doc.id, 
+        ...doc.data() 
+      }));
+      setOrdenes(lista);
+      setCargando(false);
+    });
+    return () => unsubscribe();
+  }, []);
 
-  const crearOrden = (nuevaOrden) => {
-    setOrdenes([...ordenes, { ...nuevaOrden, id: Date.now() }]);
+  /**
+   * Función para crear órdenes desde MeseroScreen
+   */
+  const crearOrden = async (nuevaOrden) => {
+    try {
+      await addDoc(collection(db, "ordenes"), {
+        ...nuevaOrden,
+        fechaCreacion: new Date(),
+        idMesero: usuario?.id || 'anonimo',
+        nombreMesero: usuario?.nombre || 'Mesero',
+        estado: 'Ordenada'
+      });
+    } catch (error) {
+      console.error("Error al enviar a Firebase:", error);
+    }
   };
 
   return (
     <AppContext.Provider
       value={{
         usuario, setUsuario,
-        usuarios,
         productos,
         ordenes, setOrdenes,
-        crearOrden
+        usuariosGlobales, // Nuevo: para el panel de administración
+        crearOrden,
+        cargando
       }}
     >
       {children}
