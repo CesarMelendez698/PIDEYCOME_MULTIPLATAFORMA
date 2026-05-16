@@ -5,7 +5,8 @@ import {
   addDoc, 
   onSnapshot, 
   query, 
-  orderBy 
+  orderBy,
+  serverTimestamp 
 } from 'firebase/firestore';
 
 export const AppContext = createContext();
@@ -18,7 +19,6 @@ export const AppProvider = ({ children }) => {
   const [cargando, setCargando] = useState(true);
 
   // 1. ESCUCHAR PRODUCTOS EN TIEMPO REAL
-  // Usamos onSnapshot para que cualquier cambio (Edición/Eliminación) se vea al instante
   useEffect(() => {
     const q = query(collection(db, "productos"), orderBy("nombre", "asc"));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -27,12 +27,12 @@ export const AppProvider = ({ children }) => {
         ...doc.data() 
       }));
       setProductos(lista);
-    });
+    }, (error) => console.error("Error productos:", error));
+    
     return () => unsubscribe();
   }, []);
 
   // 2. ESCUCHAR USUARIOS (PERSONAL) EN TIEMPO REAL
-  // Esto permite al Admin ver y gestionar a Edwin, Cesar y otros empleados
   useEffect(() => {
     const q = query(collection(db, "usuarios"), orderBy("nombre", "asc"));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -41,7 +41,8 @@ export const AppProvider = ({ children }) => {
         ...doc.data() 
       }));
       setUsuariosGlobales(lista);
-    });
+    }, (error) => console.error("Error usuarios:", error));
+
     return () => unsubscribe();
   }, []);
 
@@ -55,34 +56,49 @@ export const AppProvider = ({ children }) => {
       }));
       setOrdenes(lista);
       setCargando(false);
+    }, (error) => {
+      console.error("Error ordenes:", error);
+      setCargando(false);
     });
+
     return () => unsubscribe();
   }, []);
 
   /**
-   * Función para crear órdenes desde MeseroScreen
+   * Función unificada para crear órdenes desde MeseroScreen
+   * Incluye la corrección de fecha para los reportes de Caja y Admin
    */
   const crearOrden = async (nuevaOrden) => {
     try {
+      const ahora = new Date();
+      // Formato YYYY-MM-DD local para filtrado preciso en reportes
+      const fechaLocalFiltro = ahora.toLocaleDateString('en-CA'); 
+
       await addDoc(collection(db, "ordenes"), {
         ...nuevaOrden,
-        fechaCreacion: new Date(),
+        fechaCreacion: ahora.toISOString(), // ISO para ordenamiento
+        fechaFiltro: fechaLocalFiltro, // Para búsqueda en historial y ventas del día
+        timestamp: serverTimestamp(), // Marca de tiempo del servidor
         idMesero: usuario?.id || 'anonimo',
         nombreMesero: usuario?.nombre || 'Mesero',
-        estado: 'Ordenada'
+        estado: nuevaOrden.estado || 'Ordenada'
       });
+      return true;
     } catch (error) {
       console.error("Error al enviar a Firebase:", error);
+      throw error;
     }
   };
 
   return (
     <AppContext.Provider
       value={{
-        usuario, setUsuario,
+        usuario,
+        setUsuario,
         productos,
-        ordenes, setOrdenes,
-        usuariosGlobales, // Nuevo: para el panel de administración
+        ordenes,
+        setOrdenes,
+        usuariosGlobales,
         crearOrden,
         cargando
       }}

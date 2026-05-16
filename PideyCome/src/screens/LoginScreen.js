@@ -8,159 +8,273 @@ import {
   StyleSheet, 
   ScrollView, 
   SafeAreaView, 
-  ActivityIndicator 
+  ActivityIndicator,
+  Modal,
+  KeyboardAvoidingView,
+  Platform
 } from 'react-native';
 import { AppContext } from '../context/AppContext'; 
 import { Ionicons } from '@expo/vector-icons'; 
 
 // --- IMPORTACIONES DE FIREBASE ---
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth, db } from '../firebaseConfig'; // Importamos auth y la base de datos firestore
-import { doc, getDoc } from 'firebase/firestore'; // Funciones para leer documentos
+import { 
+  signInWithEmailAndPassword, 
+  updatePassword, 
+  signOut, 
+  sendPasswordResetEmail 
+} from 'firebase/auth';
+import { auth, db } from '../firebaseConfig'; 
+import { doc, getDoc, updateDoc } from 'firebase/firestore'; 
 
 export default function LoginScreen() {
-  // Extraemos setUsuario del contexto global para actualizar el estado de la sesión
   const { setUsuario } = useContext(AppContext);
   
-  // Estados locales para el formulario y el indicador de carga
+  // Estados para el Login
   const [user, setUser] = useState(''); 
   const [pass, setPass] = useState(''); 
   const [loading, setLoading] = useState(false); 
+  const [showPass, setShowPass] = useState(false);
+  const [focusedInput, setFocusedInput] = useState(null); 
+
+  // Estados para Recuperación de Contraseña
+  const [modalReset, setModalReset] = useState(false);
+  const [emailReset, setEmailReset] = useState('');
+
+  // Estados para Cambio de Contraseña Obligatorio
+  const [modalCambio, setModalCambio] = useState(false);
+  const [nuevaPass, setNuevaPass] = useState('');
+  const [confirmarPass, setConfirmarPass] = useState('');
+  const [showNuevaPass, setShowNuevaPass] = useState(false);
+  const [showConfirmPass, setShowConfirmPass] = useState(false);
+  const [tempUser, setTempUser] = useState(null);
 
   /**
-   * Maneja el proceso de autenticación y obtención de perfil
+   * Envía correo de recuperación
    */
-  const handleLogin = async () => {
-    // Validación básica de campos vacíos
-    if (!user.trim() || !pass.trim()) {
-      Alert.alert('Error', 'Por favor, ingrese sus credenciales');
+  const handleResetPassword = async () => {
+    if (!emailReset.trim()) {
+      Alert.alert("Correo requerido", "Por favor ingresa tu correo electrónico.");
       return;
     }
-
-    setLoading(true); // Iniciamos el spinner de carga
-
+    setLoading(true);
     try {
-      // 1. Autenticación con Firebase Auth (Verifica correo y contraseña)
-      const userCredential = await signInWithEmailAndPassword(
-        auth, 
-        user.toLowerCase().trim(), 
-        pass
+      await sendPasswordResetEmail(auth, emailReset.trim().toLowerCase());
+      Alert.alert(
+        "Correo enviado", 
+        "Se ha enviado un enlace para restablecer tu contraseña. Si no lo ves, revisa tu carpeta de Spam."
       );
-      const firebaseUser = userCredential.user; 
+      setModalReset(false);
+      setEmailReset('');
+    } catch (error) {
+      Alert.alert("Error", "No se pudo enviar el correo. Verifica que la dirección sea correcta.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
-      // 2. Consulta a Firestore para obtener el ROL del usuario
-      // Referencia al documento en la colección 'usuarios' usando el UID de la imagen image_ce1db9.png
+  /**
+   * Manejo de inicio de sesión
+   */
+  const handleLogin = async () => {
+    if (!user.trim() || !pass.trim()) {
+      Alert.alert('Datos incompletos', 'Por favor, ingrese su correo y contraseña.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const userCredential = await signInWithEmailAndPassword(auth, user.toLowerCase().trim(), pass);
+      const firebaseUser = userCredential.user; 
       const docRef = doc(db, "usuarios", firebaseUser.uid);
       const docSnap = await getDoc(docRef);
 
       if (docSnap.exists()) {
         const datosDB = docSnap.data();
-        
-        // Creamos el objeto de usuario con la información real de la base de datos
-        const usuarioLogueado = {
+        // Verificación de contraseña temporal para cualquier rol (incluido Admin)
+        if (datosDB.requiereCambio) {
+          setTempUser({ id: firebaseUser.uid, ...datosDB });
+          setModalCambio(true); 
+          setLoading(false);
+          return;
+        }
+        setUsuario({
           id: firebaseUser.uid,
-          nombre: datosDB.nombre, // Trae el nombre configurado (ej: Cesar Lara)
-          rol: datosDB.rol.toLowerCase().trim(), // Limpia espacios y convierte a minúsculas
+          nombre: datosDB.nombre,
+          rol: datosDB.rol.toLowerCase().trim(),
           email: firebaseUser.email
-        };
-
-        // Actualizamos el contexto global. 
-        // Esto dispara el AppNavigator y redirige al usuario según su rol.
-        setUsuario(usuarioLogueado);
-        
+        });
       } else {
-        // Caso donde el usuario existe en Auth pero no tiene documento en Firestore
-        Alert.alert('Error de Perfil', 'No se encontró un rol asignado para este usuario.');
-        await auth.signOut(); // Cerramos sesión para evitar estados inconsistentes
+        Alert.alert('Error', 'Perfil no encontrado.');
+        await signOut(auth);
       }
-      
     } catch (error) {
-      console.log("Error Firebase:", error.code);
-      let mensajeError = "Ocurrió un error inesperado.";
-      
-      // Manejo de errores específicos de Firebase Auth
-      if (error.code === 'auth/invalid-credential') {
-        mensajeError = "El correo o la contraseña son incorrectos.";
-      } else if (error.code === 'auth/network-request-failed') {
-        mensajeError = "Error de conexión. Revisa tu internet.";
-      } else if (error.code === 'auth/too-many-requests') {
-        mensajeError = "Demasiados intentos fallidos. Intenta más tarde.";
-      }
-
-      Alert.alert('Acceso Denegado', mensajeError);
+      Alert.alert('Acceso Denegado', 'Correo o contraseña incorrectos.');
     } finally {
-      setLoading(false); // Detenemos el spinner independientemente del resultado
+      setLoading(false);
+    }
+  };
+
+  /**
+   * Procesa el cambio de clave obligatoria
+   */
+  const procesarCambioPassword = async () => {
+    if (nuevaPass.length < 6) {
+      Alert.alert("Seguridad", "La contraseña debe tener al menos 6 caracteres.");
+      return;
+    }
+    if (nuevaPass !== confirmarPass) {
+      Alert.alert("Error", "Las contraseñas no coinciden.");
+      return;
+    }
+    setLoading(true);
+    try {
+      await updatePassword(auth.currentUser, nuevaPass);
+      await updateDoc(doc(db, "usuarios", tempUser.id), { requiereCambio: false });
+      setUsuario({
+        id: tempUser.id,
+        nombre: tempUser.nombre,
+        rol: tempUser.rol.toLowerCase().trim(),
+        email: auth.currentUser.email
+      });
+      setModalCambio(false);
+    } catch (error) {
+      Alert.alert("Error", "La sesión expiró o hubo un problema técnico. Reintente el login.");
+      setModalCambio(false);
+      await signOut(auth);
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
     <SafeAreaView style={styles.containerMain}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <View style={styles.card}>
-          {/* LOGO E IDENTIDAD VISUAL */}
-          <View style={styles.headerIcon}>
-            <View style={styles.circle}>
-              <Ionicons name="restaurant" size={45} color="white" />
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+        <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="always">
+          <View style={styles.card}>
+            <View style={styles.headerIcon}>
+              <View style={styles.circle}><Ionicons name="restaurant" size={45} color="white" /></View>
+            </View>
+            <Text style={styles.title}>PideyCome</Text>
+            <Text style={styles.subtitle}>Gestión Gastronómica</Text>
+            
+            <View style={styles.form}>
+              <Text style={styles.label}>Correo Electrónico</Text>
+              <View style={[styles.inputContainer, focusedInput === 'user' && styles.inputFocused]}>
+                <Ionicons name="mail-outline" size={20} color={focusedInput === 'user' ? "#FF6F00" : "#666"} style={styles.inputIcon} />
+                <TextInput 
+                  placeholder="usuario@pideycome.com" 
+                  style={styles.input}
+                  value={user}
+                  onChangeText={setUser}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  onFocus={() => setFocusedInput('user')}
+                  onBlur={() => setFocusedInput(null)}
+                />
+              </View>
+              
+              <Text style={styles.label}>Contraseña</Text>
+              <View style={[styles.inputContainer, focusedInput === 'pass' && styles.inputFocused]}>
+                <Ionicons name="lock-closed-outline" size={20} color={focusedInput === 'pass' ? "#FF6F00" : "#666"} style={styles.inputIcon} />
+                <TextInput 
+                  placeholder="Contraseña" 
+                  style={styles.input}
+                  value={pass}
+                  onChangeText={setPass}
+                  secureTextEntry={!showPass}
+                  onFocus={() => setFocusedInput('pass')}
+                  onBlur={() => setFocusedInput(null)}
+                />
+                <TouchableOpacity onPress={() => setShowPass(!showPass)} style={styles.eyeIcon}>
+                  <Ionicons name={showPass ? "eye-off-outline" : "eye-outline"} size={22} color="#666" />
+                </TouchableOpacity>
+              </View>
+
+              <TouchableOpacity onPress={() => setModalReset(true)} style={styles.forgotBtn}>
+                <Text style={styles.forgotText}>¿Olvidaste tu contraseña?</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity onPress={handleLogin} style={styles.btnPrincipal} disabled={loading}>
+                {loading ? <ActivityIndicator color="white" /> : (
+                  <View style={styles.btnContent}>
+                     <Text style={styles.btnText}>Iniciar Sesión</Text>
+                     <Ionicons name="arrow-forward" size={20} color="white" style={{marginLeft: 10}} />
+                  </View>
+                )}
+              </TouchableOpacity>
             </View>
           </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
 
-          <Text style={styles.title}>PideyCome</Text>
-          <Text style={styles.subtitle}>Sistema de Gestión Gastronómica</Text>
-          
-          {/* FORMULARIO DE ACCESO */}
-          <View style={styles.form}>
-            <Text style={styles.label}>Correo Electrónico</Text>
-            <View style={styles.inputContainer}>
-              <Ionicons name="mail-outline" size={20} color="#666" style={styles.inputIcon} />
-              <TextInput 
-                placeholder="ejemplo@pideycome.com" 
-                style={styles.input} 
-                value={user} 
-                onChangeText={setUser} 
-                autoCapitalize="none" 
-                keyboardType="email-address" 
-              />
-            </View>
-            
-            <Text style={styles.label}>Contraseña</Text>
-            <View style={styles.inputContainer}>
-              <Ionicons name="lock-closed-outline" size={20} color="#666" style={styles.inputIcon} />
-              <TextInput 
-                placeholder="******" 
-                style={styles.input} 
-                value={pass} 
-                onChangeText={setPass} 
-                secureTextEntry 
-              />
-            </View>
-
-            {/* BOTÓN DE ACCIÓN */}
-            <TouchableOpacity 
-              onPress={handleLogin} 
-              style={styles.btnPrincipal}
-              disabled={loading} // Desactivar mientras carga
-            >
-              {loading ? (
-                <ActivityIndicator color="white" />
-              ) : (
-                <View style={styles.btnContent}>
-                   <Text style={styles.btnText}>Iniciar Sesión</Text>
-                   <Ionicons name="arrow-forward" size={20} color="white" style={{marginLeft: 10}} />
-                </View>
-              )}
+      {/* MODAL RECUPERACIÓN */}
+      <Modal visible={modalReset} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Recuperar Acceso</Text>
+            <Text style={styles.modalText}>
+              Ingresa tu correo para recibir un enlace.{"\n"}
+              <Text style={{fontSize: 12, color: '#FF6F00', fontWeight: 'bold'}}>
+                (Si no llega, revisa tu carpeta de SPAM)
+              </Text>
+            </Text>
+            <TextInput 
+              placeholder="tu-correo@pideycome.com" 
+              style={styles.modalInput}
+              value={emailReset}
+              onChangeText={setEmailReset}
+              autoCapitalize="none"
+              keyboardType="email-address"
+            />
+            <TouchableOpacity style={styles.btnPrincipal} onPress={handleResetPassword} disabled={loading}>
+              {loading ? <ActivityIndicator color="white" /> : <Text style={styles.btnText}>Enviar Enlace</Text>}
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setModalReset(false)} style={styles.btnCancel}>
+              <Text style={{color: '#8E8E93'}}>Cancelar</Text>
             </TouchableOpacity>
           </View>
+        </View>
+      </Modal>
 
-          {/* INDICADOR DE ESTADO (Para depuración en la UDB) */}
-          <View style={styles.testSection}>
-            <Text style={styles.testTitle}>Estado de Conexión:</Text>
-            <View style={styles.statusRow}>
-               <View style={styles.dot} />
-               <Text style={styles.roleText}>Firebase Cloud Activo</Text>
+      {/* MODAL CAMBIO OBLIGATORIO */}
+      <Modal visible={modalCambio} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Ionicons name="shield-checkmark" size={50} color="#FF6F00" />
+            <Text style={styles.modalTitle}>Seguridad Requerida</Text>
+            <Text style={styles.modalText}>Tu cuenta requiere una contraseña personal para continuar.</Text>
+            
+            <View style={styles.modalInputWrapper}>
+                <TextInput 
+                  placeholder="Nueva contraseña" 
+                  secureTextEntry={!showNuevaPass} 
+                  style={styles.modalInputFlat} 
+                  value={nuevaPass} 
+                  onChangeText={setNuevaPass} 
+                />
+                <TouchableOpacity onPress={() => setShowNuevaPass(!showNuevaPass)} style={styles.modalEye}>
+                  <Ionicons name={showNuevaPass ? "eye-off-outline" : "eye-outline"} size={20} color="#666" />
+                </TouchableOpacity>
             </View>
+
+            <View style={styles.modalInputWrapper}>
+                <TextInput 
+                  placeholder="Confirmar contraseña" 
+                  secureTextEntry={!showConfirmPass} 
+                  style={styles.modalInputFlat} 
+                  value={confirmarPass} 
+                  onChangeText={setConfirmarPass} 
+                />
+                <TouchableOpacity onPress={() => setShowConfirmPass(!showConfirmPass)} style={styles.modalEye}>
+                  <Ionicons name={showConfirmPass ? "eye-off-outline" : "eye-outline"} size={20} color="#666" />
+                </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity style={styles.btnPrincipal} onPress={procesarCambioPassword} disabled={loading}>
+              {loading ? <ActivityIndicator color="white" /> : <Text style={styles.btnText}>Actualizar e Ingresar</Text>}
+            </TouchableOpacity>
           </View>
         </View>
-      </ScrollView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -175,24 +289,23 @@ const styles = StyleSheet.create({
   subtitle: { fontSize: 14, textAlign: 'center', color: '#999', marginBottom: 30 },
   form: { marginBottom: 10 },
   label: { fontSize: 13, fontWeight: 'bold', color: '#555', marginBottom: 8, marginLeft: 5 },
-  inputContainer: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    backgroundColor: '#F4F6F8', 
-    borderRadius: 12, 
-    marginBottom: 20, 
-    borderWidth: 1, 
-    borderColor: '#E1E4E8',
-    paddingHorizontal: 15
-  },
+  inputContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F4F6F8', borderRadius: 12, marginBottom: 20, borderWidth: 1.5, borderColor: '#E1E4E8', paddingHorizontal: 15, minHeight: 55 },
+  inputFocused: { borderColor: '#FF6F00', backgroundColor: 'white' },
   inputIcon: { marginRight: 10 },
-  input: { flex: 1, paddingVertical: 15, fontSize: 15, color: '#333' },
-  btnPrincipal: { backgroundColor: '#FF6F00', padding: 18, borderRadius: 12, alignItems: 'center', elevation: 3 },
+  eyeIcon: { padding: 10 },
+  input: { flex: 1, paddingVertical: 12, fontSize: 16, color: '#333', height: '100%' },
+  forgotBtn: { alignSelf: 'center', marginBottom: 25, marginTop: 5 },
+  forgotText: { color: '#FF6F00', fontSize: 14, fontWeight: '600', textDecorationLine: 'underline' },
+  btnPrincipal: { backgroundColor: '#FF6F00', padding: 18, borderRadius: 12, alignItems: 'center', elevation: 3, width: '100%' },
   btnContent: { flexDirection: 'row', alignItems: 'center' },
   btnText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
-  testSection: { marginTop: 25, borderTopWidth: 1, borderTopColor: '#F0F0F0', paddingTop: 20 },
-  testTitle: { fontSize: 11, color: '#AAA', marginBottom: 8 },
-  statusRow: { flexDirection: 'row', alignItems: 'center' },
-  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#4CAF50', marginRight: 8 },
-  roleText: { fontSize: 12, fontWeight: 'bold', color: '#4CAF50' }, 
+  btnCancel: { marginTop: 15 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 20 },
+  modalCard: { backgroundColor: 'white', borderRadius: 25, padding: 30, alignItems: 'center', elevation: 20, width: '100%' },
+  modalTitle: { fontSize: 20, fontWeight: 'bold', marginVertical: 10, color: '#333' },
+  modalText: { textAlign: 'center', color: '#666', marginBottom: 20, fontSize: 14 },
+  modalInput: { backgroundColor: '#F4F6F8', width: '100%', padding: 15, borderRadius: 12, marginBottom: 15, borderWidth: 1, borderColor: '#E1E4E8' },
+  modalInputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F4F6F8', borderRadius: 12, marginBottom: 15, borderWidth: 1, borderColor: '#E1E4E8', width: '100%' },
+  modalInputFlat: { flex: 1, padding: 15, color: '#333' },
+  modalEye: { padding: 10 }
 });

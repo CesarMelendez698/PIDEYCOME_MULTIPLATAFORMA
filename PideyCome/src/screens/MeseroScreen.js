@@ -11,12 +11,13 @@ import {
   Platform, 
   SafeAreaView,
   Modal,
-  ActivityIndicator
+  ActivityIndicator,
+  FlatList
 } from 'react-native';
 import { AppContext } from '../context/AppContext';
 import { Ionicons } from '@expo/vector-icons';
 import { db } from '../firebaseConfig';
-import { doc, updateDoc, collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { doc, updateDoc, collection, onSnapshot, query, orderBy, where } from 'firebase/firestore';
 
 export default function MeseroScreen() {
   // --- CONTEXTO Y ESTADOS GLOBALES ---
@@ -28,24 +29,63 @@ export default function MeseroScreen() {
   const [mesas, setMesas] = useState([]); 
   const [mesaSeleccionada, setMesaSeleccionada] = useState(null);
 
+  // --- ESTADOS DE NOTIFICACIONES ---
+  const [notificaciones, setNotificaciones] = useState([]);
+  const [notisVisibles, setNotisVisibles] = useState(false);
+  const [notiFlotante, setNotiFlotante] = useState(null);
+
   // --- ESTADOS DE PAGO Y FACTURACIÓN ---
   const [modalPagoVisible, setModalPagoVisible] = useState(false);
-  const [ordenAPagar, setOrdenParaPagar] = useState(null);
+  const [ordenParaPagar, setOrdenParaPagar] = useState(null);
   const [procesandoPago, setProcesandoPago] = useState(false);
   const [pagoCompletado, setPagoCompletado] = useState(false); 
   const [metodoSeleccionado, setMetodoSeleccionado] = useState('Efectivo');
 
   const categorias = ["entradas", "plato fuerte", "bebidas", "postres"];
 
-  // --- 1. CARGA DE MESAS REAL-TIME (Sincronización total) ---
+  // --- 1. CARGA DE MESAS Y NOTIFICACIONES REAL-TIME ---
   useEffect(() => {
-    const q = query(collection(db, "mesas"), orderBy("numero", "asc"));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      // Este listener hace que si el Cajero libera una mesa, aquí se vea libre de inmediato
+    if (!usuario) return;
+
+    // Listener de Mesas
+    const qMesas = query(collection(db, "mesas"), orderBy("numero", "asc"));
+    const unsubMesas = onSnapshot(qMesas, (snapshot) => {
       setMesas(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
-    return () => unsubscribe();
-  }, []);
+
+    // Listener de Notificaciones (Órdenes Despachadas del mesero actual)
+    const qNotis = query(
+      collection(db, "ordenes"), 
+      where("nombreMesero", "==", usuario.nombre),
+      where("estado", "==", "Despachada")
+    );
+
+    const unsubNotis = onSnapshot(qNotis, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === "added" || change.type === "modified") {
+          const data = change.doc.data();
+          const id = change.doc.id;
+          
+          setNotificaciones(prev => {
+            if (!prev.find(n => n.id === id)) {
+              const nuevaNoti = { id, cliente: data.cliente, mesa: data.mesa };
+              setNotiFlotante(nuevaNoti); 
+              setTimeout(() => setNotiFlotante(null), 6000); 
+              return [nuevaNoti, ...prev];
+            }
+            return prev;
+          });
+        }
+      });
+    });
+
+    return () => { unsubMesas(); unsubNotis(); };
+  }, [usuario]);
+
+  const leerNotificacion = (id) => {
+    setNotificaciones(prev => prev.filter(n => n.id !== id));
+    if (notiFlotante?.id === id) setNotiFlotante(null);
+  };
 
   // --- 2. LÓGICA DE CARRITO ---
   const agregarAlCarrito = (producto) => {
@@ -68,18 +108,19 @@ export default function MeseroScreen() {
   }, [cliente, carrito, mesaSeleccionada, tipoOrden]);
 
   // --- 3. ACCIONES FIREBASE ---
-
   const handleEnviarCocina = async () => {
     try {
       const esComerAqui = tipoOrden === 'Comer Aquí';
+      const hoy = new Date();
       await crearOrden({ 
         cliente: cliente.trim(), 
         mesa: esComerAqui ? `Mesa ${mesaSeleccionada}` : "Para Llevar", 
         idMesa: esComerAqui ? mesaSeleccionada.toString() : null,
         tipoOrden, productos: carrito, total: totalOrden, estado: 'Ordenada',
-        fechaCreacion: new Date(), nombreMesero: usuario?.nombre || 'Mesero'
+        fechaCreacion: hoy.toISOString(),
+        fechaFiltro: hoy.toLocaleDateString('en-CA'),
+        nombreMesero: usuario?.nombre || 'Mesero'
       });
-      // Ocupar mesa
       if (esComerAqui) await updateDoc(doc(db, "mesas", mesaSeleccionada.toString()), { estado: 'ocupada' });
       setCarrito([]); setCliente(''); setMesaSeleccionada(null);
       Alert.alert("Éxito", "Pedido enviado a cocina");
@@ -89,33 +130,30 @@ export default function MeseroScreen() {
   const enviarACaja = async (id) => {
     try {
       await updateDoc(doc(db, "ordenes", id), { estado: 'En Caja' });
+      leerNotificacion(id); 
       Alert.alert("Enviado", "La orden ya está en el panel de Caja.");
     } catch (error) { Alert.alert("Error", "No se pudo enviar."); }
   };
 
-  // --- 4. FLUJO DE COBRO SIMULADO ---
   const ejecutarCobroFinal = async () => {
     setProcesandoPago(true);
-    
     setTimeout(async () => {
       try {
-        // Actualizar Orden
-        await updateDoc(doc(db, "ordenes", ordenAPagar.id), { 
+        const ahora = new Date();
+        await updateDoc(doc(db, "ordenes", ordenParaPagar.id), { 
           estado: 'Pagada', 
           metodoPago: `${metodoSeleccionado} (Mesero)`,
-          fechaPago: new Date().toISOString() 
+          fechaPago: ahora.toISOString(),
+          fechaFiltro: ahora.toLocaleDateString('en-CA'),
+          responsableFinal: usuario?.nombre || 'Mesero'
         });
-        
-        // --- LIBERAR MESA AUTOMÁTICAMENTE ---
-        if (ordenAPagar.idMesa) {
-          await updateDoc(doc(db, "mesas", ordenAPagar.idMesa), { estado: 'libre' });
-        }
-
+        if (ordenParaPagar.idMesa) await updateDoc(doc(db, "mesas", ordenParaPagar.idMesa), { estado: 'libre' });
+        leerNotificacion(ordenParaPagar.id);
         setProcesandoPago(false);
         setPagoCompletado(true); 
       } catch (e) {
         setProcesandoPago(false);
-        Alert.alert("Error", "No se pudo procesar el pago.");
+        Alert.alert("Error", "Fallo al procesar pago.");
       }
     }, 2000); 
   };
@@ -123,11 +161,9 @@ export default function MeseroScreen() {
   const cerrarTodoElPago = () => {
     setModalPagoVisible(false);
     setPagoCompletado(false);
-    setProcesandoPago(false);
     setOrdenParaPagar(null);
   };
 
-  // Filtrar órdenes que solo le pertenecen al mesero actual
   const misOrdenesActivas = useMemo(() => 
     ordenes.filter(o => 
       ['Ordenada', 'Recibida', 'Preparando', 'Despachada'].includes(o.estado) && 
@@ -135,21 +171,39 @@ export default function MeseroScreen() {
     ), [ordenes, usuario]);
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container}>
+      {/* NOTIFICACIÓN FLOTANTE */}
+      {notiFlotante && (
+        <TouchableOpacity 
+          style={styles.floatingNoti} 
+          onPress={() => { leerNotificacion(notiFlotante.id); setSeccion('activas'); }}
+        >
+          <Ionicons name="notifications" size={24} color="white" />
+          <View style={{marginLeft: 10, flex: 1}}>
+            <Text style={styles.notiTitle}>¡Pedido Listo!</Text>
+            <Text style={styles.notiText}>{notiFlotante.mesa} - {notiFlotante.cliente}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color="white" />
+        </TouchableOpacity>
+      )}
+
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
-        
-        {/* HEADER */}
         <View style={styles.header}>
           <View style={{ flex: 1 }}>
             <Text style={styles.headerSubtitle}>Bienvenido mesero,</Text>
             <Text style={styles.headerTitle} numberOfLines={1}>{usuario?.nombre || 'Mesero'}</Text>
           </View>
-          <TouchableOpacity onPress={() => setUsuario(null)} style={styles.logoutBtn}>
-            <Ionicons name="log-out-outline" size={24} color="#FF3B30" />
-          </TouchableOpacity>
+          <View style={{flexDirection: 'row', alignItems: 'center'}}>
+            <TouchableOpacity style={styles.notiBtn} onPress={() => setNotisVisibles(true)}>
+              <Ionicons name="notifications-outline" size={26} color="#1C1C1E" />
+              {notificaciones.length > 0 && <View style={styles.notiBadge}><Text style={styles.notiBadgeText}>{notificaciones.length}</Text></View>}
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setUsuario(null)} style={styles.logoutBtn}>
+              <Ionicons name="log-out-outline" size={24} color="#FF3B30" />
+            </TouchableOpacity>
+          </View>
         </View>
 
-        {/* TABS */}
         <View style={styles.tabBar}>
           <TouchableOpacity style={[styles.tab, seccion === 'nueva' && styles.tabActive]} onPress={() => setSeccion('nueva')}>
             <Ionicons name="add-circle" size={22} color={seccion === 'nueva' ? '#FF6F00' : '#8E8E93'} />
@@ -215,9 +269,10 @@ export default function MeseroScreen() {
                   <View style={styles.cardLeft}>
                     <Text style={styles.itemName}>{ord.cliente}</Text>
                     <Text style={{fontSize: 12, color: '#FF6F00', fontWeight: 'bold'}}>{ord.mesa.toUpperCase()}</Text>
-                    <Text style={{fontSize: 11, color: '#8E8E93', marginTop: 4}}>{ord.estado}</Text>
+                    <View style={[styles.statusBadgeActiva, {backgroundColor: ord.estado === 'Despachada' ? '#4CAF50' : '#FFB300'}]}>
+                      <Text style={styles.statusBadgeTextActiva}>{ord.estado.toUpperCase()}</Text>
+                    </View>
                   </View>
-                  
                   {ord.estado === 'Despachada' ? (
                     <View style={styles.actionGroup}>
                       <TouchableOpacity style={[styles.btnMini, {backgroundColor: '#2196F3'}]} onPress={() => enviarACaja(ord.id)}>
@@ -230,7 +285,10 @@ export default function MeseroScreen() {
                       </TouchableOpacity>
                     </View>
                   ) : (
-                    <Text style={{fontWeight: 'bold', color: '#CCC'}}>En proceso...</Text>
+                    <View style={{alignItems: 'center'}}>
+                        <ActivityIndicator size="small" color="#FF6F00" />
+                        <Text style={{fontSize: 10, color: '#8E8E93', marginTop: 4}}>En Cocina</Text>
+                    </View>
                   )}
                 </View>
               ))}
@@ -238,7 +296,6 @@ export default function MeseroScreen() {
           )}
         </ScrollView>
 
-        {/* FOOTER CARRITO */}
         {carrito.length > 0 && seccion === 'nueva' && (
           <View style={styles.footerCart}>
             <View style={styles.cartHeaderRow}>
@@ -263,81 +320,61 @@ export default function MeseroScreen() {
         )}
       </KeyboardAvoidingView>
 
-      {/* MODAL COBRO */}
+      {/* MODAL COBRO (CON ANIMACIÓN ESTILO CAJA) */}
       <Modal visible={modalPagoVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.facturaContent}>
             {!pagoCompletado ? (
               <>
-                <View style={styles.facturaHeader}>
-                  <Ionicons name="receipt-outline" size={30} color="#FF6F00" />
-                  <Text style={styles.facturaTitle}>Detalle de Cuenta</Text>
-                  <Text style={styles.facturaSubtitle}>Cliente: {ordenAPagar?.cliente}</Text>
-                </View>
+                <View style={styles.facturaHeader}><Ionicons name="receipt-outline" size={30} color="#FF6F00" /><Text style={styles.facturaTitle}>Detalle de Cobro</Text></View>
                 <ScrollView style={{maxHeight: 180}} showsVerticalScrollIndicator={false}>
-                  {ordenAPagar?.productos.map((p, i) => (
-                    <View key={i} style={styles.facturaRow}>
-                      <Text style={styles.facturaItem}>{p.cantidad}x {p.nombre}</Text>
-                      <Text style={styles.facturaSubtotal}>${(p.cantidad * p.precio).toFixed(2)}</Text>
-                    </View>
+                  {ordenParaPagar?.productos.map((p, i) => (
+                    <View key={i} style={styles.facturaRow}><Text style={styles.facturaItem}>{p.cantidad}x {p.nombre}</Text><Text style={{fontWeight:'bold'}}>${(p.cantidad * p.precio).toFixed(2)}</Text></View>
                   ))}
                 </ScrollView>
-                <View style={styles.facturaDivider} />
-                <View style={styles.totalBoxPago}>
-                  <Text style={styles.totalLabelPago}>TOTAL A PAGAR</Text>
-                  <Text style={styles.totalValuePago}>${ordenAPagar?.total}</Text>
-                </View>
-                {procesandoPago ? (
-                  <View style={{padding: 20, alignItems: 'center'}}>
-                    <ActivityIndicator size="large" color="#FF6F00" />
-                    <Text style={{marginTop: 10, color: '#666', fontWeight: 'bold'}}>Procesando cobro...</Text>
-                  </View>
-                ) : (
+                <View style={styles.facturaDivider} /><View style={styles.facturaRow}><Text style={{fontSize: 18, fontWeight: 'bold'}}>TOTAL</Text><Text style={{fontSize: 18, fontWeight: 'bold', color: '#FF6F00'}}>${ordenParaPagar?.total}</Text></View>
+                {procesandoPago ? <View style={{padding: 20, alignItems: 'center'}}><ActivityIndicator size="large" color="#FF6F00" /><Text style={{marginTop: 10, color: '#666'}}>Procesando pago...</Text></View> : (
                   <>
                     <View style={styles.metodoRow}>
-                      <TouchableOpacity style={[styles.metodoBtn, metodoSeleccionado === 'Tarjeta' && styles.metodoBtnActive]} onPress={() => setMetodoSeleccionado('Tarjeta')}>
-                        <Ionicons name="card" size={18} color={metodoSeleccionado === 'Tarjeta' ? 'white' : '#666'} />
-                        <Text style={{ color: metodoSeleccionado === 'Tarjeta' ? 'white' : '#666', marginLeft: 5, fontWeight: 'bold' }}>Tarjeta</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={[styles.metodoBtn, metodoSeleccionado === 'Efectivo' && styles.metodoBtnActive]} onPress={() => setMetodoSeleccionado('Efectivo')}>
-                        <Ionicons name="cash" size={18} color={metodoSeleccionado === 'Efectivo' ? 'white' : '#666'} />
-                        <Text style={{ color: metodoSeleccionado === 'Efectivo' ? 'white' : '#666', marginLeft: 5, fontWeight: 'bold' }}>Efectivo</Text>
-                      </TouchableOpacity>
+                      <TouchableOpacity style={[styles.metodoBtn, metodoSeleccionado === 'Tarjeta' && styles.metodoBtnActive]} onPress={() => setMetodoSeleccionado('Tarjeta')}><Text style={{color: metodoSeleccionado === 'Tarjeta' ? 'white' : '#333'}}>Tarjeta</Text></TouchableOpacity>
+                      <TouchableOpacity style={[styles.metodoBtn, metodoSeleccionado === 'Efectivo' && styles.metodoBtnActive]} onPress={() => setMetodoSeleccionado('Efectivo')}><Text style={{color: metodoSeleccionado === 'Efectivo' ? 'white' : '#333'}}>Efectivo</Text></TouchableOpacity>
                     </View>
-                    <TouchableOpacity style={styles.confirmBtnPago} onPress={ejecutarCobroFinal}>
-                      <Text style={styles.confirmBtnTextPago}>CONFIRMAR Y COBRAR</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={{marginTop: 15, alignItems: 'center'}} onPress={() => setModalPagoVisible(false)}>
-                      <Text style={{color: '#FF3B30', fontWeight: 'bold'}}>CANCELAR</Text>
-                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.confirmBtnPago} onPress={ejecutarCobroFinal}><Text style={{color:'white', fontWeight:'bold'}}>REGISTRAR PAGO</Text></TouchableOpacity>
+                    <TouchableOpacity onPress={() => setModalPagoVisible(false)} style={{marginTop: 15, alignItems: 'center'}}><Text style={{color: '#8E8E93'}}>Cancelar</Text></TouchableOpacity>
                   </>
                 )}
               </>
             ) : (
-              <View style={styles.reciboTicket}>
-                <View style={styles.facturaHeader}>
-                  <Ionicons name="checkmark-circle" size={40} color="#4CAF50" />
-                  <Text style={styles.reciboEmpresa}>PIDEYCOME</Text>
-                  <Text style={styles.reciboSub}>Pago realizado con éxito</Text>
-                </View>
-                <View style={styles.reciboBody}>
-                  <Text style={styles.reciboInfo}>Cliente: {ordenAPagar?.cliente}</Text>
-                  <Text style={styles.reciboInfo}>Mesa: {ordenAPagar?.mesa}</Text>
-                  <View style={styles.reciboDivider} />
-                  <View style={styles.reciboRowTotal}>
-                    <Text style={styles.reciboTotalLabel}>TOTAL</Text>
-                    <Text style={styles.reciboTotalValue}>${ordenAPagar?.total}</Text>
-                  </View>
-                </View>
-                <TouchableOpacity style={styles.btnFinalizarTodo} onPress={cerrarTodoElPago}>
-                   <Text style={styles.btnFinalizarText}>FINALIZAR</Text>
+              <View style={{alignItems: 'center', padding: 20}}>
+                <Ionicons name="checkmark-done-circle" size={80} color="#4CAF50" />
+                <Text style={styles.facturaTitle}>¡Cobro Exitoso!</Text>
+                <TouchableOpacity style={[styles.confirmBtnPago, {backgroundColor: '#4CAF50', marginTop: 20, width: '100%'}]} onPress={cerrarTodoElPago}>
+                  <Text style={{color:'white'}}>FINALIZAR</Text>
                 </TouchableOpacity>
               </View>
             )}
           </View>
         </View>
       </Modal>
-    </View>
+
+      {/* MODAL NOTIFICACIONES (CAMPANITA) */}
+      <Modal visible={notisVisibles} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.facturaContent}>
+            <Text style={styles.facturaTitle}>Órdenes Listas</Text>
+            {notificaciones.length === 0 ? <Text style={{textAlign: 'center', color: '#888', marginVertical: 20}}>Sin platos por servir</Text> : (
+              <FlatList data={notificaciones} keyExtractor={item => item.id} renderItem={({item}) => (
+                <TouchableOpacity style={styles.notiItem} onPress={() => { leerNotificacion(item.id); setNotisVisibles(false); setSeccion('activas'); }}>
+                  <Ionicons name="restaurant" size={20} color="#FF6F00" />
+                  <View style={{marginLeft: 10, flex: 1}}><Text style={{fontWeight: 'bold'}}>{item.mesa}</Text><Text style={{fontSize: 12, color: '#666'}}>Cliente: {item.cliente}</Text></View>
+                </TouchableOpacity>
+              )} />
+            )}
+            <TouchableOpacity style={styles.closeFacturaBtn} onPress={() => setNotisVisibles(false)}><Text style={{color: 'white', fontWeight: 'bold'}}>CERRAR</Text></TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
   );
 }
 
@@ -346,13 +383,19 @@ const styles = StyleSheet.create({
   header: { paddingTop: Platform.OS === 'ios' ? 70 : 50, paddingBottom: 25, paddingHorizontal: 25, backgroundColor: 'white', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderBottomLeftRadius: 30, borderBottomRightRadius: 30, elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 5 },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#1C1C1E' }, 
   headerSubtitle: { fontSize: 12, color: '#8E8E93', marginBottom: 2 },
-  logoutBtn: { padding: 10, backgroundColor: '#FFF1F0', borderRadius: 12 },
+  logoutBtn: { padding: 10, backgroundColor: '#FFF1F0', borderRadius: 12, marginLeft: 10 },
+  notiBtn: { padding: 10, backgroundColor: '#F2F2F7', borderRadius: 12, position: 'relative' },
+  notiBadge: { position: 'absolute', top: 5, right: 5, backgroundColor: '#FF3B30', width: 18, height: 18, borderRadius: 9, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: 'white' },
+  notiBadgeText: { color: 'white', fontSize: 10, fontWeight: 'bold' },
+  floatingNoti: { position: 'absolute', top: Platform.OS === 'ios' ? 60 : 30, left: 20, right: 20, backgroundColor: '#1C1C1E', padding: 15, borderRadius: 15, flexDirection: 'row', alignItems: 'center', zIndex: 1000, elevation: 10, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 10 },
+  notiTitle: { color: 'white', fontWeight: 'bold', fontSize: 14 },
+  notiText: { color: '#CCC', fontSize: 12 },
   tabBar: { flexDirection: 'row', backgroundColor: 'white', marginTop: 15, marginHorizontal: 25, borderRadius: 15, padding: 5, elevation: 2 },
   tab: { flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: 12 },
   tabActive: { backgroundColor: '#FFF5EE' },
   tabText: { fontSize: 11, color: '#8E8E93', fontWeight: '500' },
   tabTextActive: { color: '#FF6F00', fontWeight: 'bold' },
-  content: { flex: 1, paddingHorizontal: 25, marginTop: 20 },
+  content: { flex: 1, paddingHorizontal: 25, paddingTop: 20 },
   sectionTitle: { fontSize: 12, fontWeight: 'bold', marginBottom: 15, color: '#3A3A3C', letterSpacing: 1 },
   configCard: { backgroundColor: 'white', padding: 15, borderRadius: 18, marginBottom: 25, elevation: 2 },
   tipoRow: { flexDirection: 'row', gap: 10 },
@@ -369,6 +412,8 @@ const styles = StyleSheet.create({
   cardLeft: { flex: 1 },
   itemName: { fontSize: 16, fontWeight: '600', color: '#1C1C1E' },
   itemPrice: { fontSize: 14, color: '#FF6F00', fontWeight: 'bold' },
+  statusBadgeActiva: { alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, marginTop: 5 },
+  statusBadgeTextActiva: { fontSize: 9, color: 'white', fontWeight: 'bold' },
   actionBtn: { padding: 8, backgroundColor: '#F2F2F7', borderRadius: 10 },
   actionGroup: { flexDirection: 'row', gap: 8 },
   btnMini: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8, elevation: 1 },
@@ -383,31 +428,16 @@ const styles = StyleSheet.create({
   sendBtn: { backgroundColor: '#FF6F00', padding: 16, borderRadius: 15, alignItems: 'center' },
   sendBtnText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 },
-  facturaContent: { backgroundColor: 'white', borderRadius: 25, padding: 25, shadowColor: '#000', elevation: 20 },
+  facturaContent: { backgroundColor: 'white', borderRadius: 25, padding: 25, shadowColor: '#000', elevation: 20, maxHeight: '80%' },
   facturaHeader: { alignItems: 'center', marginBottom: 20 },
   facturaTitle: { fontSize: 22, fontWeight: 'bold', color: '#333' },
-  facturaSubtitle: { fontSize: 12, color: '#8E8E93' },
-  facturaDivider: { height: 1, backgroundColor: '#EEE', borderStyle: 'dashed', borderWidth: 1, marginVertical: 15, borderRadius: 1 },
-  facturaRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
-  facturaItem: { fontSize: 14, color: '#333', flex: 1 },
-  facturaSubtotal: { fontSize: 14, fontWeight: 'bold' },
-  totalBoxPago: { backgroundColor: '#F2F2F7', padding: 15, borderRadius: 15, alignItems: 'center', marginBottom: 15 },
-  totalLabelPago: { fontSize: 10, color: '#8E8E93', fontWeight: 'bold' },
-  totalValuePago: { fontSize: 26, fontWeight: 'bold', color: '#FF6F00' },
-  metodoRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 },
-  metodoBtn: { flex: 1, padding: 15, borderWidth: 1, borderColor: '#EEE', borderRadius: 12, alignItems: 'center', marginHorizontal: 5, flexDirection: 'row', justifyContent: 'center' },
+  facturaRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
+  facturaItem: { fontSize: 14, flex: 1 },
+  facturaDivider: { height: 1, backgroundColor: '#F2F2F7', marginVertical: 15 },
+  metodoRow: { flexDirection: 'row', justifyContent: 'space-around', marginVertical: 15 },
+  metodoBtn: { padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#EEE', width: '45%', alignItems: 'center' },
   metodoBtnActive: { backgroundColor: '#1C1C1E', borderColor: '#1C1C1E' },
-  confirmBtnPago: { backgroundColor: '#FF6F00', padding: 18, borderRadius: 15, alignItems: 'center' },
-  confirmBtnTextPago: { color: 'white', fontWeight: 'bold', fontSize: 16 },
-  reciboTicket: { padding: 10, alignItems: 'center' },
-  reciboEmpresa: { fontSize: 22, fontWeight: '900', color: '#333', letterSpacing: 2, marginTop: 10 },
-  reciboSub: { fontSize: 12, color: '#8E8E93', textAlign: 'center' },
-  reciboBody: { width: '100%', marginVertical: 15 },
-  reciboInfo: { fontSize: 13, color: '#555', textAlign: 'center', marginBottom: 4 },
-  reciboRowTotal: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },
-  reciboTotalLabel: { fontSize: 18, fontWeight: '900', color: '#000' },
-  reciboTotalValue: { fontSize: 20, fontWeight: '900', color: '#FF6F00' },
-  reciboMetodo: { textAlign: 'center', marginTop: 20, fontSize: 11, color: '#AAA', fontStyle: 'italic' },
-  btnFinalizarTodo: { backgroundColor: '#4CAF50', width: '100%', padding: 18, borderRadius: 12, alignItems: 'center', marginTop: 10 },
-  btnFinalizarText: { color: 'white', fontWeight: 'bold', fontSize: 16 }
+  confirmBtnPago: { backgroundColor: '#FF6F00', padding: 16, borderRadius: 15, alignItems: 'center' },
+  notiItem: { flexDirection: 'row', alignItems: 'center', padding: 15, backgroundColor: '#F8F9FA', borderRadius: 12, marginBottom: 10 },
+  closeFacturaBtn: { backgroundColor: '#333', width: '100%', padding: 15, borderRadius: 12, alignItems: 'center', marginTop: 10 }
 });

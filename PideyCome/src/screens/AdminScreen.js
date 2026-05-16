@@ -8,54 +8,81 @@ import { db } from '../firebaseConfig';
 import { doc, deleteDoc } from 'firebase/firestore';
 
 export default function AdminScreen() {
-  const { setUsuario, productos, usuariosGlobales, ordenes } = useContext(AppContext); 
+  // Extraemos 'usuario' del contexto para saber quién está operando la app
+  const { usuario, setUsuario, productos, usuariosGlobales, ordenes } = useContext(AppContext); 
   const [seccion, setSeccion] = useState('menu');
   const [modalProducto, setModalProducto] = useState(false);
   const [verRegistroUser, setVerRegistroUser] = useState(false);
   const [itemParaEditar, setItemParaEditar] = useState(null);
   const [usuarioParaEditar, setUsuarioParaEditar] = useState(null);
 
-  // --- LÓGICA DE CLASIFICACIÓN ---
   const categorias = ["entradas", "plato fuerte", "bebidas", "postres"];
 
+  // --- REPORTES BASADOS EN FECHA ACTUAL ---
   const stats = useMemo(() => {
-    const pagadas = ordenes.filter(o => o.estado === 'Pagada');
-    const totalDinero = pagadas.reduce((acc, o) => acc + parseFloat(o.total || 0), 0);
+    const hoy = new Date().toLocaleDateString('en-CA'); 
+    const pagadasHoy = ordenes.filter(o => o.estado === 'Pagada' && o.fechaFiltro === hoy);
+    const totalDinero = pagadasHoy.reduce((acc, o) => acc + parseFloat(o.total || 0), 0);
+    
     return {
       monto: totalDinero.toFixed(2),
-      cantidad: pagadas.length,
+      cantidad: pagadasHoy.length,
     };
   }, [ordenes]);
 
   const handleLogout = () => {
-    Alert.alert("Cerrar Sesión", "¿Estás seguro de salir?", [
-      { text: "No" },
-      { text: "Sí", onPress: () => setUsuario(null) }
+    Alert.alert("Cerrar Sesión", "¿Estás seguro de salir del sistema?", [
+      { text: "Cancelar", style: "cancel" },
+      { text: "Cerrar Sesión", style: "destructive", onPress: () => setUsuario(null) }
     ]);
   };
 
-  const eliminarItem = (id, coleccion) => {
-    Alert.alert("Confirmar eliminación", "Esta acción no se puede deshacer.", [
-      { text: "Cancelar", style: "cancel" },
-      { text: "Eliminar", style: 'destructive', onPress: async () => {
-          await deleteDoc(doc(db, coleccion, id));
-          Alert.alert("Éxito", "Eliminado correctamente");
-      }}
-    ]);
+  // --- ELIMINACIÓN DE PRODUCTOS O EMPLEADOS ---
+  const eliminarItem = (id, coleccion, nombre) => {
+    const esUsuario = coleccion === 'usuarios';
+
+    // Validación de seguridad: No permitir que un admin se elimine a sí mismo
+    if (esUsuario && id === usuario?.id) {
+      Alert.alert("Acción no permitida", "No puedes eliminar tu propia cuenta de administrador mientras estás en sesión.");
+      return;
+    }
+
+    Alert.alert(
+      "Confirmar Eliminación",
+      `¿Estás seguro de que deseas eliminar a "${nombre}"? \n\nEsta acción no se puede deshacer y el acceso al sistema será revocado de inmediato.`,
+      [
+        { text: "Cancelar", style: "cancel" },
+        { 
+          text: "Sí, Eliminar", 
+          style: 'destructive', 
+          onPress: async () => {
+            try {
+              await deleteDoc(doc(db, coleccion, id));
+              Alert.alert("Éxito", `${esUsuario ? 'Empleado/Admin' : 'Producto'} eliminado correctamente.`);
+            } catch (error) {
+              console.error(error);
+              Alert.alert("Error", "No se pudo completar la operación. Revisa tu conexión.");
+            }
+          } 
+        }
+      ]
+    );
   };
 
   return (
     <View style={styles.container}>
+      {/* HEADER */}
       <View style={styles.header}>
         <View>
           <Text style={styles.headerSubtitle}>Bienvenido,</Text>
-          <Text style={styles.headerTitle}>Administrador</Text>
+          <Text style={styles.headerTitle}>{usuario?.nombre || 'Administrador'}</Text>
         </View>
         <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}>
           <Ionicons name="log-out-outline" size={24} color="#FF3B30" />
         </TouchableOpacity>
       </View>
 
+      {/* TABS PRINCIPALES */}
       <View style={styles.tabBar}>
         <TouchableOpacity 
           style={[styles.tab, seccion === 'menu' && styles.tabActive]} 
@@ -84,6 +111,7 @@ export default function AdminScreen() {
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         
+        {/* SECCIÓN MENÚ */}
         {seccion === 'menu' && (
           <View style={styles.seccionContainer}>
             <TouchableOpacity style={styles.btnAdd} onPress={() => { setItemParaEditar(null); setModalProducto(true); }}>
@@ -91,7 +119,8 @@ export default function AdminScreen() {
               <Text style={styles.btnAddText}> Añadir Nuevo Producto</Text>
             </TouchableOpacity>
 
-            {/* PRODUCTOS CLASIFICADOS POR CATEGORÍA */}
+            {productos.length === 0 && <Text style={styles.emptyText}>No hay productos registrados.</Text>}
+
             {categorias.map((cat) => {
               const productosFiltrados = productos.filter(p => p.categoria.toLowerCase() === cat);
               if (productosFiltrados.length === 0) return null;
@@ -109,7 +138,7 @@ export default function AdminScreen() {
                         <TouchableOpacity onPress={() => { setItemParaEditar(prod); setModalProducto(true); }} style={styles.actionBtn}>
                           <Ionicons name="pencil" size={20} color="#007AFF" />
                         </TouchableOpacity>
-                        <TouchableOpacity onPress={() => eliminarItem(prod.id, 'productos')} style={[styles.actionBtn, {backgroundColor: '#FFF1F0'}]}>
+                        <TouchableOpacity onPress={() => eliminarItem(prod.id, 'productos', prod.nombre)} style={[styles.actionBtn, {backgroundColor: '#FFF1F0'}]}>
                           <Ionicons name="trash" size={20} color="#FF3B30" />
                         </TouchableOpacity>
                       </View>
@@ -121,24 +150,26 @@ export default function AdminScreen() {
           </View>
         )}
 
-        {/* ... (Secciones de Usuarios y Reportes se mantienen igual que en tu código) */}
+        {/* SECCIÓN PERSONAL */}
         {seccion === 'usuarios' && (
           <View style={styles.seccionContainer}>
             {!verRegistroUser ? (
               <>
                 <TouchableOpacity style={[styles.btnAdd, {backgroundColor: '#007AFF'}]} onPress={() => { setUsuarioParaEditar(null); setVerRegistroUser(true); }}>
                   <Ionicons name="person-add" size={22} color="white" />
-                  <Text style={styles.btnAddText}> Registrar Nuevo Empleado</Text>
+                  <Text style={styles.btnAddText}> Registrar Nuevo Miembro</Text>
                 </TouchableOpacity>
                 
-                <Text style={styles.sectionTitle}>Equipo Registrado</Text>
+                <Text style={styles.sectionTitle}>Personal y Administradores</Text>
+                {usuariosGlobales.length === 0 && <Text style={styles.emptyText}>No hay personal registrado.</Text>}
+                
                 {usuariosGlobales?.map((user) => (
                   <View key={user.id} style={styles.cardItem}>
                     <View style={styles.cardLeft}>
-                      <Text style={styles.itemName}>{user.nombre}</Text>
-                      <View style={[styles.roleBadge, {backgroundColor: user.rol.toLowerCase().includes('admin') ? '#E8F5E9' : '#FFF3E0'}]}>
-                         <Text style={[styles.roleText, {color: user.rol.toLowerCase().includes('admin') ? '#2E7D32' : '#E65100'}]}>
-                            {user.rol.toUpperCase()}
+                      <Text style={styles.itemName}>{user.nombre} {user.id === usuario?.id && "(Tú)"}</Text>
+                      <View style={[styles.roleBadge, {backgroundColor: user.rol?.toLowerCase().includes('admin') ? '#E8F5E9' : '#FFF3E0'}]}>
+                         <Text style={[styles.roleText, {color: user.rol?.toLowerCase().includes('admin') ? '#2E7D32' : '#E65100'}]}>
+                            {user.rol?.toUpperCase()}
                          </Text>
                       </View>
                     </View>
@@ -146,7 +177,7 @@ export default function AdminScreen() {
                         <TouchableOpacity onPress={() => { setUsuarioParaEditar(user); setVerRegistroUser(true); }} style={styles.actionBtn}>
                             <Ionicons name="create-outline" size={22} color="#007AFF" />
                         </TouchableOpacity>
-                        <TouchableOpacity onPress={() => eliminarItem(user.id, 'usuarios')} style={[styles.actionBtn, {backgroundColor: '#FFF1F0', marginLeft: 10}]}>
+                        <TouchableOpacity onPress={() => eliminarItem(user.id, 'usuarios', user.nombre)} style={[styles.actionBtn, {backgroundColor: '#FFF1F0', marginLeft: 10}]}>
                             <Ionicons name="trash-outline" size={22} color="#FF3B30" />
                         </TouchableOpacity>
                     </View>
@@ -162,22 +193,23 @@ export default function AdminScreen() {
           </View>
         )}
 
+        {/* SECCIÓN REPORTES */}
         {seccion === 'reportes' && (
           <View style={styles.seccionContainer}>
-            <Text style={styles.sectionTitle}>Balance General</Text>
+            <Text style={styles.sectionTitle}>Balance del Día</Text>
             <View style={styles.cardReporte}>
               <View style={styles.reportRow}>
                 <View style={styles.reportCircle}>
                   <Ionicons name="wallet" size={30} color="#4CAF50" />
                 </View>
                 <View>
-                  <Text style={styles.reportLabel}>Ventas Totales</Text>
+                  <Text style={styles.reportLabel}>Ventas Totales (Hoy)</Text>
                   <Text style={styles.reportValue}>${stats.monto}</Text>
                 </View>
               </View>
               <View style={styles.divider} />
               <Text style={styles.reporteSub}>
-                <Ionicons name="checkmark-circle" size={14} color="#4CAF50" /> {stats.cantidad} Órdenes procesadas hoy
+                <Ionicons name="checkmark-circle" size={14} color="#4CAF50" /> {stats.cantidad} Órdenes finalizadas hoy
               </Text>
             </View>
           </View>
@@ -185,6 +217,7 @@ export default function AdminScreen() {
         <View style={{height: 40}} />
       </ScrollView>
 
+      {/* FORMULARIO MODAL PARA PRODUCTOS */}
       <FormularioProducto 
         visible={modalProducto} 
         itemEditando={itemParaEditar} 
@@ -194,7 +227,6 @@ export default function AdminScreen() {
   );
 }
 
-// ... Los estilos se mantienen exactamente igual a tu código original
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#F2F2F7' },
     header: { paddingTop: 60, paddingBottom: 20, paddingHorizontal: 25, backgroundColor: 'white', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderBottomLeftRadius: 20, borderBottomRightRadius: 20, elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 },
@@ -213,8 +245,6 @@ const styles = StyleSheet.create({
     btnAddText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
     cardItem: { backgroundColor: 'white', padding: 18, borderRadius: 18, marginBottom: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', elevation: 2 },
     cardLeft: { flex: 1 },
-    categoryBadge: { backgroundColor: '#F2F2F7', alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, marginBottom: 5 },
-    categoryText: { fontSize: 10, color: '#8E8E93', fontWeight: 'bold', textTransform: 'uppercase' },
     itemName: { fontSize: 17, fontWeight: '600', color: '#1C1C1E' },
     itemPrice: { fontSize: 15, color: '#FF6F00', fontWeight: 'bold', marginTop: 2 },
     roleBadge: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, marginTop: 6 },
@@ -227,10 +257,6 @@ const styles = StyleSheet.create({
     reportLabel: { fontSize: 14, color: '#8E8E93', fontWeight: '500' },
     reportValue: { fontSize: 28, fontWeight: 'bold', color: '#1C1C1E' },
     divider: { height: 1, backgroundColor: '#F2F2F7', marginVertical: 15 },
-    reporteTexto: { fontSize: 18, color: '#1C1C1E' },
     reporteSub: { fontSize: 13, color: '#666', fontWeight: '500' },
-    historyItem: { backgroundColor: 'white', padding: 15, borderRadius: 12, marginBottom: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-    historyLeft: { flexDirection: 'row', alignItems: 'center' },
-    historyName: { fontSize: 15, color: '#3A3A3C', marginLeft: 10, fontWeight: '500' },
-    historyAmount: { fontSize: 15, fontWeight: 'bold', color: '#4CAF50' }
-  });
+    emptyText: { textAlign: 'center', color: '#8E8E93', marginVertical: 20, fontStyle: 'italic' }
+});
