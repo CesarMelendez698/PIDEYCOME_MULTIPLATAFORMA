@@ -61,7 +61,7 @@ export default function LoginScreen() {
       await sendPasswordResetEmail(auth, emailReset.trim().toLowerCase());
       Alert.alert(
         "Correo enviado", 
-        "Se ha enviado un enlace para restablecer tu contraseña. Si no lo ves, revisa tu carpeta de Spam."
+        "Se ha enviado un enlace para restablecer tu contraseña a " + emailReset
       );
       setModalReset(false);
       setEmailReset('');
@@ -72,9 +72,6 @@ export default function LoginScreen() {
     }
   };
 
-  /**
-   * Manejo de inicio de sesión
-   */
   const handleLogin = async () => {
     if (!user.trim() || !pass.trim()) {
       Alert.alert('Datos incompletos', 'Por favor, ingrese su correo y contraseña.');
@@ -89,7 +86,6 @@ export default function LoginScreen() {
 
       if (docSnap.exists()) {
         const datosDB = docSnap.data();
-        // Verificación de contraseña temporal para cualquier rol (incluido Admin)
         if (datosDB.requiereCambio) {
           setTempUser({ id: firebaseUser.uid, ...datosDB });
           setModalCambio(true); 
@@ -113,12 +109,9 @@ export default function LoginScreen() {
     }
   };
 
-  /**
-   * Procesa el cambio de clave obligatoria
-   */
   const procesarCambioPassword = async () => {
     if (nuevaPass.length < 6) {
-      Alert.alert("Seguridad", "La contraseña debe tener al menos 6 caracteres.");
+      Alert.alert("Seguridad", "Mínimo 6 caracteres.");
       return;
     }
     if (nuevaPass !== confirmarPass) {
@@ -137,7 +130,7 @@ export default function LoginScreen() {
       });
       setModalCambio(false);
     } catch (error) {
-      Alert.alert("Error", "La sesión expiró o hubo un problema técnico. Reintente el login.");
+      Alert.alert("Error", "La sesión expiró. Reintente el login.");
       setModalCambio(false);
       await signOut(auth);
     } finally {
@@ -189,6 +182,7 @@ export default function LoginScreen() {
                 </TouchableOpacity>
               </View>
 
+              {/* BOTÓN CENTRADO */}
               <TouchableOpacity onPress={() => setModalReset(true)} style={styles.forgotBtn}>
                 <Text style={styles.forgotText}>¿Olvidaste tu contraseña?</Text>
               </TouchableOpacity>
@@ -211,12 +205,7 @@ export default function LoginScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Recuperar Acceso</Text>
-            <Text style={styles.modalText}>
-              Ingresa tu correo para recibir un enlace.{"\n"}
-              <Text style={{fontSize: 12, color: '#FF6F00', fontWeight: 'bold'}}>
-                (Si no llega, revisa tu carpeta de SPAM)
-              </Text>
-            </Text>
+            <Text style={styles.modalText}>Ingresa tu correo para recibir un enlace de restablecimiento.</Text>
             <TextInput 
               placeholder="tu-correo@pideycome.com" 
               style={styles.modalInput}
@@ -242,33 +231,8 @@ export default function LoginScreen() {
             <Ionicons name="shield-checkmark" size={50} color="#FF6F00" />
             <Text style={styles.modalTitle}>Seguridad Requerida</Text>
             <Text style={styles.modalText}>Tu cuenta requiere una contraseña personal para continuar.</Text>
-            
-            <View style={styles.modalInputWrapper}>
-                <TextInput 
-                  placeholder="Nueva contraseña" 
-                  secureTextEntry={!showNuevaPass} 
-                  style={styles.modalInputFlat} 
-                  value={nuevaPass} 
-                  onChangeText={setNuevaPass} 
-                />
-                <TouchableOpacity onPress={() => setShowNuevaPass(!showNuevaPass)} style={styles.modalEye}>
-                  <Ionicons name={showNuevaPass ? "eye-off-outline" : "eye-outline"} size={20} color="#666" />
-                </TouchableOpacity>
-            </View>
-
-            <View style={styles.modalInputWrapper}>
-                <TextInput 
-                  placeholder="Confirmar contraseña" 
-                  secureTextEntry={!showConfirmPass} 
-                  style={styles.modalInputFlat} 
-                  value={confirmarPass} 
-                  onChangeText={setConfirmarPass} 
-                />
-                <TouchableOpacity onPress={() => setShowConfirmPass(!showConfirmPass)} style={styles.modalEye}>
-                  <Ionicons name={showConfirmPass ? "eye-off-outline" : "eye-outline"} size={20} color="#666" />
-                </TouchableOpacity>
-            </View>
-
+            <TextInput placeholder="Nueva contraseña" secureTextEntry={!showNuevaPass} style={styles.modalInput} value={nuevaPass} onChangeText={setNuevaPass} />
+            <TextInput placeholder="Confirmar contraseña" secureTextEntry={!showConfirmPass} style={styles.modalInput} value={confirmarPass} onChangeText={setConfirmarPass} />
             <TouchableOpacity style={styles.btnPrincipal} onPress={procesarCambioPassword} disabled={loading}>
               {loading ? <ActivityIndicator color="white" /> : <Text style={styles.btnText}>Actualizar e Ingresar</Text>}
             </TouchableOpacity>
@@ -294,6 +258,7 @@ const styles = StyleSheet.create({
   inputIcon: { marginRight: 10 },
   eyeIcon: { padding: 10 },
   input: { flex: 1, paddingVertical: 12, fontSize: 16, color: '#333', height: '100%' },
+  // ESTILO ACTUALIZADO PARA CENTRAR
   forgotBtn: { alignSelf: 'center', marginBottom: 25, marginTop: 5 },
   forgotText: { color: '#FF6F00', fontSize: 14, fontWeight: '600', textDecorationLine: 'underline' },
   btnPrincipal: { backgroundColor: '#FF6F00', padding: 18, borderRadius: 12, alignItems: 'center', elevation: 3, width: '100%' },
@@ -301,11 +266,8 @@ const styles = StyleSheet.create({
   btnText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
   btnCancel: { marginTop: 15 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 20 },
-  modalCard: { backgroundColor: 'white', borderRadius: 25, padding: 30, alignItems: 'center', elevation: 20, width: '100%' },
+  modalCard: { backgroundColor: 'white', borderRadius: 25, padding: 30, alignItems: 'center', elevation: 20 },
   modalTitle: { fontSize: 20, fontWeight: 'bold', marginVertical: 10, color: '#333' },
   modalText: { textAlign: 'center', color: '#666', marginBottom: 20, fontSize: 14 },
-  modalInput: { backgroundColor: '#F4F6F8', width: '100%', padding: 15, borderRadius: 12, marginBottom: 15, borderWidth: 1, borderColor: '#E1E4E8' },
-  modalInputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F4F6F8', borderRadius: 12, marginBottom: 15, borderWidth: 1, borderColor: '#E1E4E8', width: '100%' },
-  modalInputFlat: { flex: 1, padding: 15, color: '#333' },
-  modalEye: { padding: 10 }
+  modalInput: { backgroundColor: '#F4F6F8', width: '100%', padding: 15, borderRadius: 12, marginBottom: 15, borderWidth: 1, borderColor: '#E1E4E8' }
 });
