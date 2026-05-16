@@ -7,7 +7,6 @@ import { createUserWithEmailAndPassword } from 'firebase/auth';
 export default function RegistroEmpleado({ onFinalizar, itemParaEditar }) {
   const [nombre, setNombre] = useState('');
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [rol, setRol] = useState('mesero');
   const [loading, setLoading] = useState(false);
 
@@ -22,14 +21,26 @@ export default function RegistroEmpleado({ onFinalizar, itemParaEditar }) {
     }
   }, [itemParaEditar]);
 
+  // --- FUNCIÓN PARA GENERAR CONTRASEÑA ALEATORIA ---
+  const generarPasswordAleatoria = () => {
+    const caracteres = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$';
+    let resultado = '';
+    for (let i = 0; i < 8; i++) {
+      resultado += caracteres.charAt(Math.floor(Math.random() * caracteres.length));
+    }
+    return resultado;
+  };
+
   const handleGuardar = async () => {
     if (!nombre.trim() || !email.trim()) {
       Alert.alert("Error", "El nombre y el correo son obligatorios");
       return;
     }
 
-    if (!itemParaEditar && password.length < 6) {
-      Alert.alert("Error", "La contraseña debe tener al menos 6 caracteres");
+    // --- NUEVA VALIDACIÓN DE FORMATO DE CORREO (REGEX) ---
+    const regexCorreo = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!regexCorreo.test(email.trim())) {
+      Alert.alert("Formato Inválido", "Por favor ingresa una dirección de correo electrónico válida.");
       return;
     }
 
@@ -44,13 +55,14 @@ export default function RegistroEmpleado({ onFinalizar, itemParaEditar }) {
         });
         Alert.alert("Éxito", "Perfil actualizado correctamente");
       } else {
-        // --- CREACIÓN (Para cualquier rol, incluyendo Admin) ---
+        // --- CREACIÓN CON CONTRASEÑA AUTOGENERADA ---
+        const passwordTemporal = generarPasswordAleatoria();
         
-        // 1. Crear cuenta en Firebase Auth
+        // 1. Crear cuenta en Firebase Auth con la clave generada
         const userCredential = await createUserWithEmailAndPassword(
           auth, 
           email.toLowerCase().trim(), 
-          password
+          passwordTemporal
         );
         
         const nuevoUid = userCredential.user.uid;
@@ -65,10 +77,13 @@ export default function RegistroEmpleado({ onFinalizar, itemParaEditar }) {
           fechaAlta: new Date().toISOString()
         });
         
+        // Mostrar la contraseña generada al administrador
         Alert.alert(
           "Usuario Registrado", 
-          `Se ha creado la cuenta de ${rol}. El usuario deberá cambiar su contraseña al iniciar sesión por primera vez.`
+          `Se ha creado la cuenta de ${rol.toUpperCase()}.\n\nContraseña Temporal:\n${passwordTemporal}\n\nPor favor, cópiala y entrégala al empleado. Deberá cambiarla al iniciar sesión.`,
+          [{ text: "Entendido", onPress: () => onFinalizar() }]
         );
+        return; // Evita que ejecute el onFinalizar duplicado de abajo
       }
       
       onFinalizar(); 
@@ -76,6 +91,8 @@ export default function RegistroEmpleado({ onFinalizar, itemParaEditar }) {
       console.log("Error Firebase:", e.code);
       if (e.code === 'auth/email-already-in-use') {
         Alert.alert("Error", "Este correo electrónico ya está registrado");
+      } else if (e.code === 'auth/invalid-email') {
+        Alert.alert("Error", "El formato del correo no es aceptado por el servidor.");
       } else {
         Alert.alert("Error", "No se pudo completar la operación: " + e.message);
       }
@@ -108,19 +125,6 @@ export default function RegistroEmpleado({ onFinalizar, itemParaEditar }) {
         keyboardType="email-address"
         editable={!itemParaEditar} 
       />
-
-      {!itemParaEditar && (
-        <>
-          <Text style={styles.labelInput}>Contraseña Temporal</Text>
-          <TextInput 
-            placeholder="Mínimo 6 caracteres" 
-            style={styles.input} 
-            secureTextEntry 
-            value={password} 
-            onChangeText={setPassword} 
-          />
-        </>
-      )}
       
       <Text style={styles.label}>Asignar Rol:</Text>
       <View style={styles.rolesGrid}>
@@ -171,7 +175,7 @@ const styles = StyleSheet.create({
     borderWidth: 1, 
     borderColor: '#FF6F00', 
     borderRadius: 8, 
-    width: '48%', // Dos por fila para mejor orden
+    width: '48%', 
     alignItems: 'center',
     marginBottom: 10
   },

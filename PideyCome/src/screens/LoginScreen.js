@@ -120,15 +120,19 @@ export default function LoginScreen() {
     }
     setLoading(true);
     try {
+      // 1. Actualizar en Firebase Auth
       await updatePassword(auth.currentUser, nuevaPass);
+      // 2. Modificar la bandera en Firestore
       await updateDoc(doc(db, "usuarios", tempUser.id), { requiereCambio: false });
-      setUsuario({
-        id: tempUser.id,
-        nombre: tempUser.nombre,
-        rol: tempUser.rol.toLowerCase().trim(),
-        email: auth.currentUser.email
-      });
+      
+      // 3. Forzar el cierre de sesión y limpiar campos para regresar de forma segura al Login
+      await signOut(auth);
       setModalCambio(false);
+      setNuevaPass('');
+      setConfirmarPass('');
+      setPass(''); // Limpiamos la clave temporal del formulario de login
+      
+      Alert.alert("Éxito", "Contraseña actualizada. Por favor, inicia sesión con tus nuevas credenciales.");
     } catch (error) {
       Alert.alert("Error", "La sesión expiró. Reintente el login.");
       setModalCambio(false);
@@ -231,8 +235,37 @@ export default function LoginScreen() {
             <Ionicons name="shield-checkmark" size={50} color="#FF6F00" />
             <Text style={styles.modalTitle}>Seguridad Requerida</Text>
             <Text style={styles.modalText}>Tu cuenta requiere una contraseña personal para continuar.</Text>
-            <TextInput placeholder="Nueva contraseña" secureTextEntry={!showNuevaPass} style={styles.modalInput} value={nuevaPass} onChangeText={setNuevaPass} />
-            <TextInput placeholder="Confirmar contraseña" secureTextEntry={!showConfirmPass} style={styles.modalInput} value={confirmarPass} onChangeText={setConfirmarPass} />
+            
+            <View style={[styles.inputContainer, focusedInput === 'nueva' && styles.inputFocused, {width: '100%'}]}>
+              <TextInput 
+                placeholder="Nueva contraseña" 
+                secureTextEntry={!showNuevaPass} 
+                style={styles.input} 
+                value={nuevaPass} 
+                onChangeText={setNuevaPass} 
+                onFocus={() => setFocusedInput('nueva')}
+                onBlur={() => setFocusedInput(null)}
+              />
+              <TouchableOpacity onPress={() => setShowNuevaPass(!showNuevaPass)} style={styles.eyeIcon}>
+                <Ionicons name={showNuevaPass ? "eye-off-outline" : "eye-outline"} size={22} color="#666" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={[styles.inputContainer, focusedInput === 'confirmar' && styles.inputFocused, {width: '100%'}]}>
+              <TextInput 
+                placeholder="Confirmar contraseña" 
+                secureTextEntry={!showConfirmPass} 
+                style={styles.input} 
+                value={confirmarPass} 
+                onChangeText={setConfirmarPass} 
+                onFocus={() => setFocusedInput('confirmar')}
+                onBlur={() => setFocusedInput(null)}
+              />
+              <TouchableOpacity onPress={() => setShowConfirmPass(!showConfirmPass)} style={styles.eyeIcon}>
+                <Ionicons name={showConfirmPass ? "eye-off-outline" : "eye-outline"} size={22} color="#666" />
+              </TouchableOpacity>
+            </View>
+
             <TouchableOpacity style={styles.btnPrincipal} onPress={procesarCambioPassword} disabled={loading}>
               {loading ? <ActivityIndicator color="white" /> : <Text style={styles.btnText}>Actualizar e Ingresar</Text>}
             </TouchableOpacity>
@@ -258,7 +291,6 @@ const styles = StyleSheet.create({
   inputIcon: { marginRight: 10 },
   eyeIcon: { padding: 10 },
   input: { flex: 1, paddingVertical: 12, fontSize: 16, color: '#333', height: '100%' },
-  // ESTILO ACTUALIZADO PARA CENTRAR
   forgotBtn: { alignSelf: 'center', marginBottom: 25, marginTop: 5 },
   forgotText: { color: '#FF6F00', fontSize: 14, fontWeight: '600', textDecorationLine: 'underline' },
   btnPrincipal: { backgroundColor: '#FF6F00', padding: 18, borderRadius: 12, alignItems: 'center', elevation: 3, width: '100%' },
